@@ -75,7 +75,9 @@ final class DatabaseStore {
             "CREATE TABLE IF NOT EXISTS announcements (id INT PRIMARY KEY, title VARCHAR(160) NOT NULL, message VARCHAR(1000) NOT NULL, published_on DATE NOT NULL, due_date DATE NULL)",
             "CREATE TABLE IF NOT EXISTS assessments (id INT PRIMARY KEY, module_code VARCHAR(24) NOT NULL, assessment_type VARCHAR(16) NOT NULL, title VARCHAR(160) NOT NULL, due_date DATE NOT NULL, details VARCHAR(1000) NOT NULL, CONSTRAINT chk_assessment_type CHECK (assessment_type IN ('Assignment', 'Exam')), CONSTRAINT fk_assessments_module FOREIGN KEY (module_code) REFERENCES modules(module_code) ON DELETE CASCADE)",
             "CREATE TABLE IF NOT EXISTS student_assessment_progress (assessment_id INT NOT NULL, student_id INT NOT NULL, status VARCHAR(16) NOT NULL, PRIMARY KEY (assessment_id, student_id), CONSTRAINT chk_assessment_progress_status CHECK (status IN ('Not started', 'In progress', 'Completed')), CONSTRAINT fk_assessment_progress_assessment FOREIGN KEY (assessment_id) REFERENCES assessments(id) ON DELETE CASCADE, CONSTRAINT fk_assessment_progress_student FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE)",
-            "CREATE TABLE IF NOT EXISTS student_tasks (id INT PRIMARY KEY, student_id INT NOT NULL, module_code VARCHAR(24) NULL, task_type VARCHAR(16) NOT NULL, title VARCHAR(160) NOT NULL, due_date DATE NOT NULL, details VARCHAR(1000) NOT NULL, status VARCHAR(16) NOT NULL, CONSTRAINT chk_student_task_type CHECK (task_type IN ('Assignment', 'Exam')), CONSTRAINT chk_student_task_status CHECK (status IN ('Not started', 'In progress', 'Completed')), CONSTRAINT fk_student_tasks_student FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE, CONSTRAINT fk_student_tasks_module FOREIGN KEY (module_code) REFERENCES modules(module_code) ON DELETE SET NULL)"
+            "CREATE TABLE IF NOT EXISTS student_tasks (id INT PRIMARY KEY, student_id INT NOT NULL, module_code VARCHAR(24) NULL, task_type VARCHAR(16) NOT NULL, title VARCHAR(160) NOT NULL, due_date DATE NOT NULL, details VARCHAR(1000) NOT NULL, status VARCHAR(16) NOT NULL, CONSTRAINT chk_student_task_type CHECK (task_type IN ('Assignment', 'Exam')), CONSTRAINT chk_student_task_status CHECK (status IN ('Not started', 'In progress', 'Completed')), CONSTRAINT fk_student_tasks_student FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE, CONSTRAINT fk_student_tasks_module FOREIGN KEY (module_code) REFERENCES modules(module_code) ON DELETE SET NULL)",
+            "CREATE TABLE IF NOT EXISTS attendance_sessions (id INT PRIMARY KEY, module_code VARCHAR(24) NOT NULL, session_date DATE NOT NULL, title VARCHAR(100) NOT NULL, CONSTRAINT fk_attendance_sessions_module FOREIGN KEY (module_code) REFERENCES modules(module_code) ON DELETE CASCADE)",
+            "CREATE TABLE IF NOT EXISTS attendance_records (session_id INT NOT NULL, student_id INT NOT NULL, status VARCHAR(16) NOT NULL, PRIMARY KEY (session_id, student_id), CONSTRAINT chk_attendance_status CHECK (status IN ('Not marked', 'Present', 'Absent')), CONSTRAINT fk_attendance_records_session FOREIGN KEY (session_id) REFERENCES attendance_sessions(id) ON DELETE CASCADE, CONSTRAINT fk_attendance_records_student FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE)"
         };
         try (Connection connection = connect(); Statement statement = connection.createStatement()) {
             for (String sql : statements) statement.executeUpdate(sql);
@@ -524,13 +526,50 @@ final class DatabaseStore {
         return tasks;
     }
 
+    List<PortalData.AttendanceSession> loadAttendanceSessions() throws SQLException {
+        List<PortalData.AttendanceSession> sessions = new ArrayList<PortalData.AttendanceSession>();
+        try (Connection connection = connect();
+                PreparedStatement statement = connection.prepareStatement(
+                        "SELECT id, module_code, session_date, title FROM attendance_sessions "
+                                + "ORDER BY session_date DESC, id DESC");
+                ResultSet results = statement.executeQuery()) {
+            while (results.next()) {
+                sessions.add(new PortalData.AttendanceSession(
+                        results.getInt("id"),
+                        results.getString("module_code"),
+                        results.getDate("session_date").toLocalDate(),
+                        results.getString("title")));
+            }
+        }
+        return sessions;
+    }
+
+    List<PortalData.AttendanceRecord> loadAttendanceRecords() throws SQLException {
+        List<PortalData.AttendanceRecord> records = new ArrayList<PortalData.AttendanceRecord>();
+        try (Connection connection = connect();
+                PreparedStatement statement = connection.prepareStatement(
+                        "SELECT session_id, student_id, status FROM attendance_records "
+                                + "ORDER BY session_id, student_id");
+                ResultSet results = statement.executeQuery()) {
+            while (results.next()) {
+                records.add(new PortalData.AttendanceRecord(
+                        results.getInt("session_id"),
+                        results.getInt("student_id"),
+                        results.getString("status")));
+            }
+        }
+        return records;
+    }
+
     void save(List<PortalData.Student> students, List<PortalData.Lecturer> lecturers,
             List<PortalData.Course> courses, List<PortalData.Module> modules,
             List<PortalData.TimetableEntry> timetableEntries,
             List<PortalData.Announcement> announcements,
             List<PortalData.Assessment> assessments,
             List<PortalData.AssessmentProgress> assessmentProgress,
-            List<PortalData.StudentTask> studentTasks) throws SQLException {
+            List<PortalData.StudentTask> studentTasks,
+            List<PortalData.AttendanceSession> attendanceSessions,
+            List<PortalData.AttendanceRecord> attendanceRecords) throws SQLException {
         try (Connection connection = connect()) {
             connection.setAutoCommit(false);
             try {
@@ -546,6 +585,7 @@ final class DatabaseStore {
                 saveStudents(connection, students);
                 saveAssessments(connection, assessments, assessmentProgress, students);
                 saveStudentTasks(connection, studentTasks, students, modules);
+                saveAttendance(connection, attendanceSessions, attendanceRecords, students, modules);
                 saveMarks(connection, students);
                 saveTimetableEntries(connection, timetableEntries);
                 saveAnnouncements(connection, announcements);
@@ -737,6 +777,68 @@ final class DatabaseStore {
                 statement.addBatch();
             }
             statement.executeBatch();
+        }
+    }
+
+    private void saveAttendance(Connection connection,
+            List<PortalData.AttendanceSession> sessions,
+            List<PortalData.AttendanceRecord> records,
+            List<PortalData.Student> students,
+            List<PortalData.Module> modules) throws SQLException {
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate("DELETE FROM attendance_records");
+        }
+        deleteRemovedAttendanceSessions(connection, sessions);
+
+        java.util.Set<String> moduleCodes = new java.util.HashSet<String>();
+        for (PortalData.Module module : modules) moduleCodes.add(module.code);
+        java.util.Set<Integer> sessionIds = new java.util.HashSet<Integer>();
+        try (PreparedStatement statement = connection.prepareStatement(
+                "INSERT INTO attendance_sessions (id, module_code, session_date, title) "
+                        + "VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE "
+                        + "module_code = VALUES(module_code), session_date = VALUES(session_date), "
+                        + "title = VALUES(title)")) {
+            for (PortalData.AttendanceSession session : sessions) {
+                if (!moduleCodes.contains(session.moduleCode)) continue;
+                statement.setInt(1, session.id);
+                statement.setString(2, session.moduleCode);
+                statement.setObject(3, session.sessionDate);
+                statement.setString(4, session.title);
+                statement.addBatch();
+                sessionIds.add(session.id);
+            }
+            statement.executeBatch();
+        }
+
+        java.util.Set<Integer> studentIds = new java.util.HashSet<Integer>();
+        for (PortalData.Student student : students) studentIds.add(student.id);
+        try (PreparedStatement statement = connection.prepareStatement(
+                "INSERT INTO attendance_records (session_id, student_id, status) VALUES (?, ?, ?)")) {
+            for (PortalData.AttendanceRecord record : records) {
+                if (!sessionIds.contains(record.sessionId) || !studentIds.contains(record.studentId)) continue;
+                statement.setInt(1, record.sessionId);
+                statement.setInt(2, record.studentId);
+                statement.setString(3, record.status);
+                statement.addBatch();
+            }
+            statement.executeBatch();
+        }
+    }
+
+    private void deleteRemovedAttendanceSessions(Connection connection,
+            List<PortalData.AttendanceSession> sessions) throws SQLException {
+        StringBuilder sql = new StringBuilder("DELETE FROM attendance_sessions");
+        if (!sessions.isEmpty()) {
+            sql.append(" WHERE id NOT IN (");
+            for (int i = 0; i < sessions.size(); i++) {
+                if (i > 0) sql.append(", ");
+                sql.append("?");
+            }
+            sql.append(")");
+        }
+        try (PreparedStatement statement = connection.prepareStatement(sql.toString())) {
+            for (int i = 0; i < sessions.size(); i++) statement.setInt(i + 1, sessions.get(i).id);
+            statement.executeUpdate();
         }
     }
 

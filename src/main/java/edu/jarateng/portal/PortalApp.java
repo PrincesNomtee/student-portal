@@ -428,10 +428,10 @@ public final class PortalApp {
             return Arrays.asList("Overview", "Students", "Courses", "Lecturers", "Announcements");
         }
         if ("Lecturer".equals(user.role)) {
-            return Arrays.asList("Overview", "My students", "Capture marks", "Assessment tracker",
+            return Arrays.asList("Overview", "My students", "Capture marks", "Attendance", "Assessment tracker",
                     "Announcements", "My profile");
         }
-        return Arrays.asList("Overview", "My modules", "Assessment tracker", "Timetable",
+        return Arrays.asList("Overview", "My modules", "Attendance", "Assessment tracker", "Timetable",
                 "Academic results", "Announcements", "My profile");
     }
 
@@ -480,6 +480,9 @@ public final class PortalApp {
             case "Lecturers": body.add(lecturersPage()); break;
             case "My students": body.add(lecturerStudents()); break;
             case "Capture marks": body.add(captureMarks()); break;
+            case "Attendance":
+                body.add("Lecturer".equals(user.role) ? lecturerAttendance() : studentAttendance());
+                break;
             case "Assessment tracker":
                 body.add("Lecturer".equals(user.role)
                         ? lecturerAssessmentTracker() : studentAssessmentTracker());
@@ -504,6 +507,11 @@ public final class PortalApp {
         if ("Lecturers".equals(page)) return "Faculty directory and teaching allocations.";
         if ("My students".equals(page)) return "Students enrolled in the modules assigned to you.";
         if ("Capture marks".equals(page)) return "Record four assessment marks for an enrolled student.";
+        if ("Attendance".equals(page)) {
+            return "Lecturer".equals(user.role)
+                    ? "Create class sessions and record attendance for your enrolled students."
+                    : "Review attendance records and your attendance percentage by module.";
+        }
         if ("Assessment tracker".equals(page)) {
             return "Lecturer".equals(user.role)
                     ? "Publish and manage assignments and exams for your modules."
@@ -1381,6 +1389,243 @@ public final class PortalApp {
         section.add(leftAligned(save), BorderLayout.SOUTH);
         page.add(section);
         loadScores.run();
+        return page;
+    }
+
+    private JPanel lecturerAttendance() {
+        JPanel page = verticalPanel();
+        PortalData.Lecturer lecturer = data.lecturer(user.id);
+        List<PortalData.AttendanceSession> sessions = new ArrayList<PortalData.AttendanceSession>();
+        for (PortalData.AttendanceSession session : data.attendanceSessions) {
+            if (lecturer.modules.contains(session.moduleCode)) sessions.add(session);
+        }
+        sessions.sort(Comparator.comparing((PortalData.AttendanceSession item) -> item.sessionDate)
+                .reversed().thenComparing(item -> item.moduleCode));
+        Object[][] rows = new Object[sessions.size()][7];
+        for (int i = 0; i < sessions.size(); i++) {
+            PortalData.AttendanceSession session = sessions.get(i);
+            int present = 0;
+            int absent = 0;
+            int unmarked = 0;
+            for (PortalData.Student student : studentsInModule(session.moduleCode)) {
+                String status = data.attendanceStatus(session.id, student.id);
+                if ("Present".equals(status)) present++;
+                else if ("Absent".equals(status)) absent++;
+                else unmarked++;
+            }
+            rows[i] = new Object[] { session.sessionDate.format(DATE_FORMAT), session.moduleCode,
+                    data.moduleName(session.moduleCode), session.title, present, absent, unmarked };
+        }
+        JTable table = table(new String[] { "Date", "Module", "Module name", "Class session",
+                "Present", "Absent", "Not marked" }, rows);
+        table.putClientProperty("portal.attendanceSessions", sessions);
+        JPanel content = tablePanel(table);
+        JPanel actions = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 10));
+        actions.setOpaque(false);
+        JButton create = primaryButton("Create class session");
+        JButton mark = secondaryButton("Take / update attendance");
+        JButton remove = secondaryButton("Remove session");
+        create.addActionListener(event -> createAttendanceSession(lecturer));
+        mark.addActionListener(event -> markAttendance(table, lecturer));
+        remove.addActionListener(event -> removeAttendanceSession(table, lecturer));
+        actions.add(create);
+        actions.add(mark);
+        actions.add(remove);
+        content.add(actions, BorderLayout.SOUTH);
+        page.add(section("Attendance for my modules", content));
+        page.add(Box.createVerticalStrut(12));
+        page.add(notePanel("Attendance recording",
+                "Only lecturers assigned to a module can create sessions and record its roster. Unmarked students are not counted as absent."));
+        return page;
+    }
+
+    @SuppressWarnings("unchecked")
+    private PortalData.AttendanceSession selectedAttendanceSession(JTable table) {
+        int row = table.getSelectedRow();
+        if (row < 0) {
+            showMessage("Select a class session first.", JOptionPane.INFORMATION_MESSAGE);
+            return null;
+        }
+        List<PortalData.AttendanceSession> sessions =
+                (List<PortalData.AttendanceSession>) table.getClientProperty("portal.attendanceSessions");
+        return sessions.get(table.convertRowIndexToModel(row));
+    }
+
+    private List<PortalData.Student> studentsInModule(String moduleCode) {
+        List<PortalData.Student> students = new ArrayList<PortalData.Student>();
+        for (PortalData.Student student : data.students) {
+            PortalData.Course course = data.course(student.courseCode);
+            if (course != null && course.modules.contains(moduleCode)) students.add(student);
+        }
+        students.sort(Comparator.comparing((PortalData.Student student) -> student.surname,
+                String.CASE_INSENSITIVE_ORDER).thenComparing(student -> student.firstName,
+                        String.CASE_INSENSITIVE_ORDER));
+        return students;
+    }
+
+    private void createAttendanceSession(PortalData.Lecturer lecturer) {
+        if (lecturer.modules.isEmpty()) {
+            showMessage("You need an assigned module before you can record attendance.",
+                    JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        JComboBox<String> module = combo(lecturer.modules.toArray(new String[0]));
+        JTextField date = field(LocalDate.now().format(DATE_FORMAT));
+        JTextField title = field("Lecture");
+        JPanel form = new JPanel(new GridLayout(0, 1, 7, 7));
+        form.setBorder(BorderFactory.createEmptyBorder(10, 4, 8, 4));
+        form.add(new JLabel("Module"));
+        form.add(module);
+        form.add(new JLabel("Session date (YYYY-MM-DD)"));
+        form.add(date);
+        form.add(new JLabel("Session name (up to 100 characters)"));
+        form.add(title);
+        int answer = JOptionPane.showConfirmDialog(frame, form, "Create class session",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        if (answer != JOptionPane.OK_OPTION) return;
+
+        String moduleCode = (String) module.getSelectedItem();
+        String sessionTitle = title.getText().trim();
+        LocalDate sessionDate;
+        try {
+            sessionDate = LocalDate.parse(date.getText().trim(), DATE_FORMAT);
+        } catch (DateTimeParseException error) {
+            showMessage("Enter the session date in YYYY-MM-DD format.", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        if (moduleCode == null || !lecturer.modules.contains(moduleCode)
+                || sessionDate.isAfter(LocalDate.now()) || sessionTitle.isEmpty()
+                || sessionTitle.length() > 100) {
+            showMessage("Choose one of your modules, use a session date no later than today, "
+                    + "and enter a name of at most 100 characters.", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+
+        PortalData.AttendanceSession session = new PortalData.AttendanceSession(
+                data.nextAttendanceSessionId(), moduleCode, sessionDate, sessionTitle);
+        data.attendanceSessions.add(session);
+        for (PortalData.Student student : studentsInModule(moduleCode)) {
+            data.setAttendanceStatus(session.id, student.id, "Not marked");
+        }
+        if (!persistAndRefresh("Class session created. Mark the roster present or absent.")) {
+            data.attendanceSessions.remove(session);
+            data.attendanceRecords.removeIf(record -> record.sessionId == session.id);
+        }
+    }
+
+    private void markAttendance(JTable sessionTable, PortalData.Lecturer lecturer) {
+        PortalData.AttendanceSession session = selectedAttendanceSession(sessionTable);
+        if (session == null) return;
+        if (!lecturer.modules.contains(session.moduleCode)) {
+            showMessage("You are not assigned to this module.", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+        List<PortalData.Student> roster = studentsInModule(session.moduleCode);
+        if (roster.isEmpty()) {
+            showMessage("There are no students enrolled in this module.", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+
+        List<JComboBox<String>> statusFields = new ArrayList<JComboBox<String>>();
+        JPanel form = new JPanel(new GridLayout(0, 2, 10, 7));
+        for (PortalData.Student student : roster) {
+            form.add(new JLabel(student.number + " · " + student.fullName()));
+            JComboBox<String> status = combo(new String[] { "Not marked", "Present", "Absent" });
+            status.setSelectedItem(data.attendanceStatus(session.id, student.id));
+            statusFields.add(status);
+            form.add(status);
+        }
+        JScrollPane scroll = new JScrollPane(form);
+        scroll.setPreferredSize(new Dimension(560, Math.min(440, Math.max(130, roster.size() * 42))));
+        int answer = JOptionPane.showConfirmDialog(frame, scroll,
+                "Attendance · " + session.moduleCode + " · " + session.sessionDate.format(DATE_FORMAT),
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        if (answer != JOptionPane.OK_OPTION) return;
+
+        List<PortalData.AttendanceRecord> previousRecords = new ArrayList<PortalData.AttendanceRecord>();
+        for (PortalData.AttendanceRecord record : data.attendanceRecords) {
+            if (record.sessionId == session.id) {
+                previousRecords.add(new PortalData.AttendanceRecord(
+                        record.sessionId, record.studentId, record.status));
+            }
+        }
+        for (int i = 0; i < roster.size(); i++) {
+            data.setAttendanceStatus(session.id, roster.get(i).id,
+                    (String) statusFields.get(i).getSelectedItem());
+        }
+        if (!persistAndRefresh("Attendance saved for " + roster.size() + " students.")) {
+            data.attendanceRecords.removeIf(record -> record.sessionId == session.id);
+            data.attendanceRecords.addAll(previousRecords);
+        }
+    }
+
+    private void removeAttendanceSession(JTable table, PortalData.Lecturer lecturer) {
+        PortalData.AttendanceSession session = selectedAttendanceSession(table);
+        if (session == null) return;
+        if (!lecturer.modules.contains(session.moduleCode)) {
+            showMessage("You are not assigned to this module.", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+        int answer = JOptionPane.showConfirmDialog(frame,
+                "Remove this class session and its attendance records?",
+                "Remove class session", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+        if (answer != JOptionPane.YES_OPTION) return;
+        int index = data.attendanceSessions.indexOf(session);
+        List<PortalData.AttendanceRecord> previousRecords = new ArrayList<PortalData.AttendanceRecord>();
+        for (PortalData.AttendanceRecord record : data.attendanceRecords) {
+            if (record.sessionId == session.id) {
+                previousRecords.add(new PortalData.AttendanceRecord(
+                        record.sessionId, record.studentId, record.status));
+            }
+        }
+        data.attendanceSessions.remove(session);
+        data.attendanceRecords.removeIf(record -> record.sessionId == session.id);
+        if (!persistAndRefresh("Class session and its attendance records removed.")) {
+            data.attendanceSessions.add(index, session);
+            data.attendanceRecords.addAll(previousRecords);
+        }
+    }
+
+    private JPanel studentAttendance() {
+        JPanel page = verticalPanel();
+        PortalData.Student student = data.student(user.id);
+        PortalData.Course course = student == null ? null : data.course(student.courseCode);
+        List<String> moduleCodes = course == null ? new ArrayList<String>() : course.modules;
+        List<PortalData.AttendanceSession> sessions = new ArrayList<PortalData.AttendanceSession>();
+        for (PortalData.AttendanceSession session : data.attendanceSessions) {
+            if (moduleCodes.contains(session.moduleCode)) sessions.add(session);
+        }
+        sessions.sort(Comparator.comparing((PortalData.AttendanceSession item) -> item.sessionDate)
+                .reversed().thenComparing(item -> item.moduleCode));
+        int present = 0;
+        int absent = 0;
+        int unmarked = 0;
+        Object[][] rows = new Object[sessions.size()][5];
+        for (int i = 0; i < sessions.size(); i++) {
+            PortalData.AttendanceSession session = sessions.get(i);
+            String status = data.attendanceStatus(session.id, student.id);
+            if ("Present".equals(status)) present++;
+            else if ("Absent".equals(status)) absent++;
+            else unmarked++;
+            rows[i] = new Object[] { session.sessionDate.format(DATE_FORMAT), session.moduleCode,
+                    data.moduleName(session.moduleCode), session.title, status };
+        }
+        int marked = present + absent;
+        String percentage = marked == 0 ? "No data" : String.format("%.1f%%", present * 100.0 / marked);
+        JPanel summary = new JPanel(new GridLayout(1, 4, 10, 0));
+        summary.setOpaque(false);
+        summary.add(statCard("ATTENDANCE", percentage, "Of marked sessions", "01"));
+        summary.add(statCard("PRESENT", String.valueOf(present), "Sessions attended", "02"));
+        summary.add(statCard("ABSENT", String.valueOf(absent), "Sessions missed", "03"));
+        summary.add(statCard("NOT MARKED", String.valueOf(unmarked), "Awaiting a lecturer record", "04"));
+        page.add(section("My attendance summary", summary));
+        page.add(Box.createVerticalStrut(14));
+        page.add(section("Attendance by class session", tablePanel(table(new String[] {
+                "Date", "Module", "Module name", "Class session", "Status"
+        }, rows))));
+        page.add(Box.createVerticalStrut(12));
+        page.add(notePanel("How the percentage is calculated",
+                "Attendance is present sessions divided by present and absent sessions. Unmarked sessions are excluded and are not treated as absences."));
         return page;
     }
 

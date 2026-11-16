@@ -12,6 +12,7 @@ This document describes the current implementation for learning and system-analy
 - Let an administrator maintain student and lecturer records.
 - Give students a progress dashboard, assessment insights, next steps, and a personal timetable.
 - Let lecturers publish module assignments and exams, and let students track shared assessment progress or create private reminders.
+- Let lecturers record attendance by class session and let students review their attendance history and percentage.
 - Let administrators publish campus announcements and deadline reminders for students.
 - Show students the modules in their programme and their assessment results.
 - Let lecturers view students in assigned modules and capture marks.
@@ -22,8 +23,8 @@ This document describes the current implementation for learning and system-analy
 | Stakeholder | Current system capabilities |
 | --- | --- |
 | Administrator | View an overview; add, edit, and remove student records; create courses and modules; assign modules to courses and multiple lecturers; add and remove lecturers; publish and remove campus announcements with optional deadlines. |
-| Lecturer | View allocated modules and students in those modules; capture up to four assessment marks per module; publish and manage module assignments and exams; view campus announcements. |
-| Student | View a study dashboard, suggested next steps, assessment averages and trends, profile, programme modules, results, shared module assessments and progress, private reminders, announcements, and a personal timetable with overlap checking. |
+| Lecturer | View allocated modules and students in those modules; capture up to four assessment marks per module; record class attendance; publish and manage module assignments and exams; view campus announcements. |
+| Student | View a study dashboard, suggested next steps, assessment averages and trends, profile, programme modules, results, shared module assessments and progress, private reminders, attendance history and percentage, announcements, and a personal timetable with overlap checking. |
 | System operator | Install Java, Maven, and MySQL; create the database; configure the database connection; back up the local database. |
 
 In normal MySQL-backed mode, student accounts are provisioned by an administrator from the student directory. The student number is the username; accounts use the shared temporary password `Welcome@1234`, which must be changed on first sign-in. Only its salted PBKDF2 hash is stored. Students can change their password from their profile, and administrators can reset an account to the shared temporary password. This shared password is for local demonstration only and is not appropriate for real or production accounts. The built-in student demo sign-in is limited to session-only demo mode; the lecturer demo sign-in remains built in. The administrator account is stored in MySQL with a salted PBKDF2 hash. This remains demonstration authentication, not a production identity or authorization system.
@@ -52,12 +53,15 @@ In normal MySQL-backed mode, student accounts are provisioned by an administrato
 | FR-16 | Show students shared assessments for their programme modules and let each student track their own progress. | Student |
 | FR-17 | Let students create, edit, track, and remove private assignment or exam reminders, optionally linked to a programme module. | Student |
 | FR-18 | Persist shared assessments, per-student progress, and private reminders in MySQL. | System |
+| FR-19 | Let lecturers create class sessions for assigned modules and record enrolled students as present, absent, or not marked. | Lecturer |
+| FR-20 | Let students view their attendance history and calculate attendance percentage from marked sessions only. | Student |
+| FR-21 | Persist attendance sessions and per-student records in MySQL. | System |
 
 ### 4.2 Quality attributes and constraints
 
 - **Usability:** a role-based Swing desktop interface with forms, tables, keyboard-accessible controls, and scrollable pages that remain usable at smaller window sizes.
 - **Persistence:** MySQL is the normal persistent store; legacy CSV files are only an initialization/import source.
-- **Data integrity:** primary keys, unique student numbers and email addresses, foreign keys, mark range checks, timetable time checks, and application-level overlap validation protect stored records.
+- **Data integrity:** primary keys, unique student numbers and email addresses, foreign keys, mark range checks, attendance-status checks, timetable time checks, and application-level overlap validation protect stored records.
 - **Portability:** Maven declares Java 25 as the compiler release and manages the MySQL JDBC driver.
 - **Security limitation:** the application defaults to a local `root` MySQL login unless `MYSQL_USER` is configured. Demo student and lecturer credentials are built into the program. Do not use real student information or expose the demo credentials publicly.
 - **Operational limitation:** this is a single-computer demonstration, not a multi-user hosted system. It does not provide production backup, audit, privacy, or deployment procedures.
@@ -87,6 +91,20 @@ In normal MySQL-backed mode, student accounts are provisioned by an administrato
 2. Open **Capture marks** and select an assigned module/student.
 3. Enter assessment scores (the database allows values from 0 to 100 and assessment numbers 1 to 4).
 4. Save the change; the application persists the updated data.
+
+**Lecturer records class attendance**
+
+1. Sign in to the Lecturer workspace and open **Attendance**.
+2. Create a session for an assigned module using a date no later than today and a session name.
+3. Open the session register and set each enrolled student's status to **Present**, **Absent**, or **Not marked**.
+4. Save the register; students can view only their own status for sessions in their modules.
+5. A student's percentage is present sessions divided by present and absent sessions. Unmarked entries are excluded, not counted as absences.
+
+**Student views attendance**
+
+1. Sign in to the Student workspace and open **Attendance**.
+2. Review the attendance summary and the date, module, session, and status for each recorded session.
+3. The displayed percentage is based only on sessions marked present or absent; unmarked sessions are listed separately.
 
 **Student views results**
 
@@ -182,6 +200,8 @@ flowchart LR
     Assessments["assessments"]
     AssessmentProgress["student_assessment_progress"]
     StudentTasks["student_tasks"]
+    AttendanceSessions["attendance_sessions"]
+    AttendanceRecords["attendance_records"]
 
     Courses -->|"one programme has many students"| Students
     Courses -->|"programme module links"| CourseModules
@@ -197,6 +217,9 @@ flowchart LR
     Students -->|"tracks own progress"| AssessmentProgress
     Students -->|"private reminders"| StudentTasks
     Modules -->|"optional reminder module"| StudentTasks
+    Modules -->|"class session"| AttendanceSessions
+    AttendanceSessions -->|"student roll"| AttendanceRecords
+    Students -->|"attendance status"| AttendanceRecords
 ```
 
 ### 6.1 Data dictionary
@@ -217,6 +240,8 @@ flowchart LR
 | `assessments` | `id INT PK`; `module_code VARCHAR(24) NOT NULL FK -> modules.module_code ON DELETE CASCADE`; `assessment_type VARCHAR(16) NOT NULL` (`Assignment` or `Exam`); `title VARCHAR(160) NOT NULL`; `due_date DATE NOT NULL`; `details VARCHAR(1000) NOT NULL` | Lecturer-published assignment and exam deadlines shared with students taking the module. |
 | `student_assessment_progress` | `assessment_id INT FK -> assessments.id ON DELETE CASCADE`; `student_id INT FK -> students.id ON DELETE CASCADE`; `status VARCHAR(16) NOT NULL` (`Not started`, `In progress`, or `Completed`); composite `PK(assessment_id, student_id)` | Stores each student's private progress status for a shared assessment. |
 | `student_tasks` | `id INT PK`; `student_id INT NOT NULL FK -> students.id ON DELETE CASCADE`; `module_code VARCHAR(24) NULL FK -> modules.module_code ON DELETE SET NULL`; `task_type VARCHAR(16) NOT NULL`; `title VARCHAR(160) NOT NULL`; `due_date DATE NOT NULL`; `details VARCHAR(1000) NOT NULL`; `status VARCHAR(16) NOT NULL` | Private assignment or exam reminders created by a student; a module association is optional. |
+| `attendance_sessions` | `id INT PK`; `module_code VARCHAR(24) NOT NULL FK -> modules.module_code ON DELETE CASCADE`; `session_date DATE NOT NULL`; `title VARCHAR(100) NOT NULL` | A dated class meeting created by a lecturer assigned to the module. |
+| `attendance_records` | `session_id INT FK -> attendance_sessions.id ON DELETE CASCADE`; `student_id INT FK -> students.id ON DELETE CASCADE`; `status VARCHAR(16) NOT NULL` (`Not marked`, `Present`, or `Absent`); composite `PK(session_id, student_id)` | One student's attendance status for one class session. |
 | `administrators` | `id INT AUTO_INCREMENT PK`; `username VARCHAR(64) NOT NULL UK`; `first_name VARCHAR(100) NOT NULL`; `surname VARCHAR(100) NOT NULL`; `password_hash VARCHAR(255) NOT NULL`; `created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP` | Administrator sign-in identity and salted password hash. |
 
 ### 6.2 Relationship rules
@@ -228,6 +253,7 @@ flowchart LR
 - Timetable entries belong to one student and one module. The timetable is student-managed planning information, not an official institutional schedule.
 - A lecturer publishes shared assessments for an assigned module. Students registered in a course containing that module can see the assessment; progress is stored separately for each student.
 - A student can maintain private assignment or exam reminders. A reminder belongs to one student and may optionally reference a module; deleting the student cascades to reminders, while deleting the module clears the optional module reference.
+- A class session belongs to one module, and a student can have at most one attendance status for that session. Deleting a session, module, or student cascades to its dependent attendance records. Unmarked entries do not count as absences or in the attendance percentage.
 - Announcements are shared across roles; a nullable deadline supports student reminders without inventing due dates.
 - Administrator accounts, announcements, and startup metadata are independent of student registration records.
 - Each student may have one account. The student number is used as the login name; password hashes and the required-change flag are stored separately from profile data. Removing a student cascades to their account.
@@ -255,6 +281,8 @@ flowchart LR
     Assessment["PortalData.Assessment<br/>module type title dueDate details"]
     AssessmentProgress["PortalData.AssessmentProgress<br/>assessment student status"]
     StudentTask["PortalData.StudentTask<br/>student module type dueDate status"]
+    AttendanceSession["PortalData.AttendanceSession<br/>module sessionDate title"]
+    AttendanceRecord["PortalData.AttendanceRecord<br/>session student status"]
     DatabaseStore["DatabaseStore<br/>JDBC persistence"]
     CsvStore["CsvStore<br/>legacy CSV import"]
     DatabaseConnection["DatabaseConnection<br/>connection test"]
@@ -270,6 +298,8 @@ flowchart LR
     PortalData -->|"contains"| Assessment
     PortalData -->|"contains"| AssessmentProgress
     PortalData -->|"contains"| StudentTask
+    PortalData -->|"contains"| AttendanceSession
+    PortalData -->|"contains"| AttendanceRecord
     PortalData -->|"returns on authentication"| Administrator
     Student -->|"registered in"| Course
     Student -->|"may have one login"| StudentAccount
@@ -278,6 +308,9 @@ flowchart LR
     AssessmentProgress -->|"student progress"| Student
     StudentTask -->|"private reminder"| Student
     StudentTask -->|"optional module"| Module
+    AttendanceSession -->|"class session"| Module
+    AttendanceRecord -->|"attendance for"| AttendanceSession
+    AttendanceRecord -->|"student status"| Student
     Module -->|"assigned lecturer IDs"| Lecturer
     PortalData -->|"loads and saves through"| DatabaseStore
     DatabaseStore -->|"imports legacy files through"| CsvStore
@@ -289,8 +322,8 @@ flowchart LR
 
 | Class | Responsibility |
 | --- | --- |
-| `PortalApp` | Creates the Swing login and role-specific workspaces; validates demo student/lecturer credentials; provides the progress dashboard, timetable overlap checks, assessment tracker, announcement board, and persistence actions. |
-| `PortalData` | Holds students, courses, modules, lecturers, timetable entries, announcements, shared assessments, student progress, and private reminders; provides lookups, sample data, and persistence delegation. |
+| `PortalApp` | Creates the Swing login and role-specific workspaces; validates demo student/lecturer credentials; provides the progress dashboard, timetable overlap checks, attendance tracker, assessment tracker, announcement board, and persistence actions. |
+| `PortalData` | Holds students, courses, modules, lecturers, timetable entries, announcements, shared assessments, student progress, private reminders, and attendance records; provides lookups, sample data, and persistence delegation. |
 | `PortalData.Student` | Represents a student and their per-module assessment scores in the in-memory model. |
 | `student_accounts` | Stores the student's PBKDF2 password hash and whether the temporary password must be changed. |
 | `PortalData.Course` | Represents a programme and its configured modules. |
@@ -302,6 +335,8 @@ flowchart LR
 | `PortalData.Assessment` | Represents an assignment or exam published for a module by a lecturer. |
 | `PortalData.AssessmentProgress` | Represents one student's progress status for a shared module assessment. |
 | `PortalData.StudentTask` | Represents a private student assignment or exam reminder, optionally linked to a module. |
+| `PortalData.AttendanceSession` | Represents a dated class session for one module. |
+| `PortalData.AttendanceRecord` | Represents one student's status for a class session. |
 | `DatabaseStore` | Creates tables, authenticates administrators, reads/writes MySQL records, and imports legacy CSV data through `CsvStore`. |
 | `CsvStore` | Reads and writes legacy student and lecturer CSV files using UTF-8 and safe temporary-file replacement. Current database persistence is handled by `DatabaseStore`. |
 | `DatabaseConnection` | Provides a standalone UI-based check of the configured JDBC connection. |

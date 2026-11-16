@@ -209,6 +209,32 @@ final class PortalData {
         }
     }
 
+    static final class AttendanceSession {
+        final int id;
+        final String moduleCode;
+        final LocalDate sessionDate;
+        final String title;
+
+        AttendanceSession(int id, String moduleCode, LocalDate sessionDate, String title) {
+            this.id = id;
+            this.moduleCode = moduleCode;
+            this.sessionDate = sessionDate;
+            this.title = title;
+        }
+    }
+
+    static final class AttendanceRecord {
+        final int sessionId;
+        final int studentId;
+        String status;
+
+        AttendanceRecord(int sessionId, int studentId, String status) {
+            this.sessionId = sessionId;
+            this.studentId = studentId;
+            this.status = status;
+        }
+    }
+
     final List<Student> students;
     final List<Course> courses;
     final List<Module> modules;
@@ -218,6 +244,8 @@ final class PortalData {
     final List<Assessment> assessments;
     final List<AssessmentProgress> assessmentProgress;
     final List<StudentTask> studentTasks;
+    final List<AttendanceSession> attendanceSessions;
+    final List<AttendanceRecord> attendanceRecords;
     private final DatabaseStore store;
     private final boolean sessionOnlyDemo;
 
@@ -232,13 +260,15 @@ final class PortalData {
             List<Announcement> announcements, boolean sessionOnlyDemo) {
         this(store, students, lecturers, courses, modules, timetableEntries, announcements,
                 new ArrayList<Assessment>(), new ArrayList<AssessmentProgress>(),
-                new ArrayList<StudentTask>(), sessionOnlyDemo);
+                new ArrayList<StudentTask>(), new ArrayList<AttendanceSession>(),
+                new ArrayList<AttendanceRecord>(), sessionOnlyDemo);
     }
 
     private PortalData(DatabaseStore store, List<Student> students, List<Lecturer> lecturers,
             List<Course> courses, List<Module> modules, List<TimetableEntry> timetableEntries,
             List<Announcement> announcements, List<Assessment> assessments,
             List<AssessmentProgress> assessmentProgress, List<StudentTask> studentTasks,
+            List<AttendanceSession> attendanceSessions, List<AttendanceRecord> attendanceRecords,
             boolean sessionOnlyDemo) {
         this.store = store;
         this.students = students;
@@ -250,6 +280,8 @@ final class PortalData {
         this.assessments = assessments;
         this.assessmentProgress = assessmentProgress;
         this.studentTasks = studentTasks;
+        this.attendanceSessions = attendanceSessions;
+        this.attendanceRecords = attendanceRecords;
         this.sessionOnlyDemo = sessionOnlyDemo;
         synchronizeLecturerModules();
     }
@@ -312,12 +344,15 @@ final class PortalData {
         List<Assessment> assessments = store.loadAssessments();
         List<AssessmentProgress> assessmentProgress = store.loadAssessmentProgress();
         List<StudentTask> studentTasks = store.loadStudentTasks();
+        List<AttendanceSession> attendanceSessions = store.loadAttendanceSessions();
+        List<AttendanceRecord> attendanceRecords = store.loadAttendanceRecords();
         if (courses.isEmpty() && modules.isEmpty()) {
             courses = sampleCourses();
             modules = sampleModules();
         }
         PortalData data = new PortalData(store, students, lecturers, courses, modules,
-                timetableEntries, announcements, assessments, assessmentProgress, studentTasks, false);
+                timetableEntries, announcements, assessments, assessmentProgress, studentTasks,
+                attendanceSessions, attendanceRecords, false);
         if (!store.isInitialized()) data.save();
         return data;
     }
@@ -331,10 +366,19 @@ final class PortalData {
         List<StudentTask> studentTasks = new ArrayList<StudentTask>(Arrays.asList(
                 new StudentTask(1, 1, "BDA201", "Assignment", "Review case study notes",
                         LocalDate.now().plusDays(3), "Prepare questions for the next class.", "In progress")));
+        List<AttendanceSession> attendanceSessions = new ArrayList<AttendanceSession>(Arrays.asList(
+                new AttendanceSession(1, "BDA201", LocalDate.now().minusDays(7), "Lecture"),
+                new AttendanceSession(2, "DVR203", LocalDate.now().minusDays(3), "Lab session")));
+        List<AttendanceRecord> attendanceRecords = new ArrayList<AttendanceRecord>(Arrays.asList(
+                new AttendanceRecord(1, 1, "Present"),
+                new AttendanceRecord(1, 2, "Absent"),
+                new AttendanceRecord(1, 3, "Present"),
+                new AttendanceRecord(2, 1, "Present"),
+                new AttendanceRecord(2, 2, "Present")));
         return new PortalData(null, sampleStudents(), sampleLecturers(),
                 sampleCourses(), sampleModules(), new ArrayList<TimetableEntry>(),
                 new ArrayList<Announcement>(), assessments, new ArrayList<AssessmentProgress>(),
-                studentTasks, true);
+                studentTasks, attendanceSessions, attendanceRecords, true);
     }
 
     boolean isSessionOnlyDemo() {
@@ -344,7 +388,7 @@ final class PortalData {
     void save() throws SQLException {
         if (sessionOnlyDemo) return;
         store.save(students, lecturers, courses, modules, timetableEntries, announcements,
-                assessments, assessmentProgress, studentTasks);
+                assessments, assessmentProgress, studentTasks, attendanceSessions, attendanceRecords);
     }
 
     Administrator authenticateAdministrator(String username, char[] password) throws SQLException {
@@ -518,6 +562,29 @@ final class PortalData {
         int next = 1;
         for (StudentTask task : studentTasks) next = Math.max(next, task.id + 1);
         return next;
+    }
+
+    int nextAttendanceSessionId() {
+        int next = 1;
+        for (AttendanceSession session : attendanceSessions) next = Math.max(next, session.id + 1);
+        return next;
+    }
+
+    String attendanceStatus(int sessionId, int studentId) {
+        for (AttendanceRecord record : attendanceRecords) {
+            if (record.sessionId == sessionId && record.studentId == studentId) return record.status;
+        }
+        return "Not marked";
+    }
+
+    void setAttendanceStatus(int sessionId, int studentId, String status) {
+        for (AttendanceRecord record : attendanceRecords) {
+            if (record.sessionId == sessionId && record.studentId == studentId) {
+                record.status = status;
+                return;
+            }
+        }
+        attendanceRecords.add(new AttendanceRecord(sessionId, studentId, status));
     }
 
     String assessmentStatus(int studentId, int assessmentId) {

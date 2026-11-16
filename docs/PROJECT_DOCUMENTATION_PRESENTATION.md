@@ -24,7 +24,8 @@ us and how the parts connect.
 The purpose of the system is to bring student registration and related
 academic activities into one Java desktop application. It covers student
 records, academic programmes, lecturers, modules, assessment marks, personal
-timetable plans, and campus announcements.
+timetable plans, attendance, shared assignment and exam deadlines, and campus
+announcements.
 
 The scope is deliberately limited to a local demonstration. The documentation
 also makes clear that authentication, data governance, backups, and operating
@@ -38,8 +39,9 @@ not claim to do.
 
 The objectives describe what the project is intended to provide. These include
 a central student register, administrator management of student and lecturer
-records, student progress and timetable views, lecturer access to assigned
-students and marks, and announcements with optional deadlines.
+records, student progress, attendance and timetable views, lecturer access to
+assigned students, marks and attendance registers, and announcements with
+optional deadlines.
 
 Another objective is to save application records in MySQL and provide a way to
 import existing student and lecturer CSV data when initializing an empty
@@ -51,11 +53,12 @@ the features shown in the application.
 [Show section 3 and its stakeholder table.]
 
 The documentation identifies four stakeholder types. Administrators maintain
-student and academic records. Lecturers see their assigned modules and students
-and record assessment marks, and publish shared assignment and exam deadlines.
-Students view their own progress, modules, results, shared assessments, private
-reminders, timetable, profile, and announcements. The system operator prepares
-Java, Maven, and MySQL and looks after the database configuration and backups.
+student and academic records. Lecturers see their assigned modules and students,
+record assessment marks and attendance, and publish shared assignment and exam
+deadlines. Students view their own progress, modules, results, shared
+assessments, private reminders, attendance history, timetable, profile, and
+announcements. The system operator prepares Java, Maven, and MySQL and looks
+after the database configuration and backups.
 
 This section also explains how demonstration accounts work. For example, a
 student account in the normal MySQL-backed mode is provisioned by an
@@ -70,7 +73,8 @@ system.
 
 The system analysis explains what users can do and the rules the application
 should follow, including lecturer-published module assessments, individual
-student progress states, and private student reminders.
+student progress states, private student reminders, and attendance sessions
+with student-specific statuses.
 
 First, the functional requirements use IDs such as FR-01 and FR-02 to identify
 specific capabilities. They cover the overview, student registration and
@@ -87,9 +91,9 @@ operational limitations.
 Finally, the use-case flows explain tasks step by step. For example, an
 administrator registers a student by entering their details and programme;
 the application validates the information, assigns a student number, and
-saves the record. Other flows describe curriculum management, capturing
-marks, viewing results, adding a timetable entry, and publishing an
-announcement.
+saves the record. Other flows describe curriculum management, capturing marks
+and class attendance, viewing results, adding a timetable entry, and publishing
+an announcement.
 
 Together, these requirements and flows connect the project goals to actions
 that can be demonstrated and checked.
@@ -123,7 +127,8 @@ The database design explains how the system's information is organized in
 MySQL. The diagram shows the main tables and their relationships: students
 belong to courses; courses and modules are linked through a join table; marks
 connect students and modules; and timetable entries connect a student with a
-scheduled module.
+scheduled module. The attendance tables associate each module class session
+with per-student attendance statuses.
 
 The data dictionary describes each table's purpose, important columns, and
 constraints. Primary keys identify records, foreign keys connect related
@@ -132,7 +137,8 @@ For example, `assessment_marks` identifies a student's mark for a particular
 module and assessment, with checks for the permitted assessment number and
 score range. The `assessments` table stores shared module assignment and exam
 deadlines, `student_assessment_progress` stores each student's progress for
-those deadlines, and `student_tasks` stores private student reminders.
+those deadlines, and `student_tasks` stores private student reminders. The
+attendance tables link a dated module session to one status per student.
 
 The relationship rules add meaning to the diagram. A course can share modules
 with other courses, and a module can be assigned to multiple lecturers.
@@ -140,7 +146,8 @@ Timetable entries are personal planning information, not an official
 institutional schedule. Shared assessments are visible to students taking a
 module, while each progress state and personal reminder belongs to one
 student. These rules help explain how the application avoids inconsistent
-relationships.
+relationships. Attendance percentages use only records marked present or
+absent; unmarked entries are excluded rather than counted as absences.
 
 ## 8. Class diagram and design
 
@@ -149,8 +156,8 @@ relationships.
 The class diagram describes the main software components and how they relate.
 `PortalApp` is responsible for the Swing interface. `PortalData` groups the
 application's in-memory information, such as students, courses, modules,
-announcements, assessments, progress states, and private reminders.
-`DatabaseStore` handles persistent database access, while
+announcements, assessments, progress states, private reminders, and attendance
+sessions and records. `DatabaseStore` handles persistent database access, while
 `CsvStore` supports legacy file import.
 
 The responsibility table gives a short explanation of each class and model.
