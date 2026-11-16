@@ -83,6 +83,8 @@ final class PortalData {
         final String surname;
         final String email;
         final List<String> modules;
+        String passwordHash;
+        boolean mustChangePassword;
 
         Lecturer(int id, String firstName, String surname, String email, String... modules) {
             this.id = id;
@@ -94,6 +96,10 @@ final class PortalData {
 
         String fullName() {
             return firstName + " " + surname;
+        }
+
+        boolean hasAccount() {
+            return passwordHash != null && !passwordHash.isEmpty();
         }
     }
 
@@ -282,6 +288,19 @@ final class PortalData {
         return null;
     }
 
+    Lecturer authenticateLecturer(String email, char[] password) throws SQLException {
+        if (sessionOnlyDemo && "lecturer.demo".equalsIgnoreCase(email)
+                && "Lecturer2026!".equals(new String(password))) {
+            return lecturer(1);
+        }
+        for (Lecturer candidate : lecturers) {
+            if (!candidate.email.equalsIgnoreCase(email)) continue;
+            if (candidate.hasAccount()
+                    && DatabaseStore.verifyPassword(password, candidate.passwordHash)) return candidate;
+        }
+        return null;
+    }
+
     void provisionStudentAccount(Student student, char[] temporaryPassword) throws SQLException {
         String passwordHash;
         try {
@@ -307,6 +326,33 @@ final class PortalData {
         if (!sessionOnlyDemo) store.changeStudentPassword(student.id, passwordHash);
         student.passwordHash = passwordHash;
         student.mustChangePassword = false;
+    }
+
+    void provisionLecturerAccount(Lecturer lecturer, char[] temporaryPassword) throws SQLException {
+        String passwordHash;
+        try {
+            passwordHash = DatabaseStore.hashPassword(temporaryPassword);
+        } catch (GeneralSecurityException error) {
+            throw new SQLException("Could not create the lecturer password.", error);
+        }
+        if (!sessionOnlyDemo) store.provisionLecturerAccount(lecturer.id, passwordHash);
+        lecturer.passwordHash = passwordHash;
+        lecturer.mustChangePassword = true;
+    }
+
+    void changeLecturerPassword(Lecturer lecturer, char[] password) throws SQLException {
+        if (password.length < 12) {
+            throw new IllegalArgumentException("Use at least 12 characters for the password.");
+        }
+        String passwordHash;
+        try {
+            passwordHash = DatabaseStore.hashPassword(password);
+        } catch (GeneralSecurityException error) {
+            throw new SQLException("Could not create the lecturer password.", error);
+        }
+        if (!sessionOnlyDemo) store.changeLecturerPassword(lecturer.id, passwordHash);
+        lecturer.passwordHash = passwordHash;
+        lecturer.mustChangePassword = false;
     }
 
     Course course(String code) {

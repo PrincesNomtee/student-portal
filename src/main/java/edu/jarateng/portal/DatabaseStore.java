@@ -27,7 +27,7 @@ final class DatabaseStore {
             "jdbc:mysql://localhost:3306/jarateng_portal?connectionTimeZone=LOCAL";
     static final String DEMO_ADMIN_USERNAME = "admin.demo";
     static final String DEMO_ADMIN_PASSWORD = "Admin2026!";
-    static final String DEFAULT_STUDENT_TEMPORARY_PASSWORD = "Welcome@1234";
+    static final String DEFAULT_TEMPORARY_PASSWORD = "Welcome@1234";
     private static final int PASSWORD_ITERATIONS = 120000;
     private static final int PASSWORD_SALT_BYTES = 16;
     private static final int PASSWORD_HASH_BITS = 256;
@@ -68,6 +68,7 @@ final class DatabaseStore {
             "CREATE TABLE IF NOT EXISTS lecturers (id INT PRIMARY KEY, first_name VARCHAR(100) NOT NULL, surname VARCHAR(100) NOT NULL, email VARCHAR(254) NOT NULL UNIQUE)",
             "CREATE TABLE IF NOT EXISTS administrators (id INT NOT NULL AUTO_INCREMENT PRIMARY KEY, username VARCHAR(64) NOT NULL UNIQUE, first_name VARCHAR(100) NOT NULL, surname VARCHAR(100) NOT NULL, password_hash VARCHAR(255) NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
             "CREATE TABLE IF NOT EXISTS student_accounts (student_id INT PRIMARY KEY, password_hash VARCHAR(255) NOT NULL, must_change_password BOOLEAN NOT NULL DEFAULT TRUE, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, CONSTRAINT fk_student_accounts_student FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE)",
+            "CREATE TABLE IF NOT EXISTS lecturer_accounts (lecturer_id INT PRIMARY KEY, password_hash VARCHAR(255) NOT NULL, must_change_password BOOLEAN NOT NULL DEFAULT TRUE, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, CONSTRAINT fk_lecturer_accounts_lecturer FOREIGN KEY (lecturer_id) REFERENCES lecturers(id) ON DELETE CASCADE)",
             "CREATE TABLE IF NOT EXISTS assessment_marks (student_id INT NOT NULL, module_code VARCHAR(24) NOT NULL, assessment_number TINYINT NOT NULL, score TINYINT UNSIGNED NOT NULL, PRIMARY KEY (student_id, module_code, assessment_number), CONSTRAINT chk_assessment_number CHECK (assessment_number BETWEEN 1 AND 4), CONSTRAINT chk_assessment_score CHECK (score BETWEEN 0 AND 100), CONSTRAINT fk_marks_student FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE, CONSTRAINT fk_marks_module FOREIGN KEY (module_code) REFERENCES modules(module_code))",
             "CREATE TABLE IF NOT EXISTS timetable_entries (id INT NOT NULL AUTO_INCREMENT PRIMARY KEY, student_id INT NOT NULL, module_code VARCHAR(24) NOT NULL, day_of_week TINYINT NOT NULL, start_time TIME NOT NULL, end_time TIME NOT NULL, location VARCHAR(120) NOT NULL, CONSTRAINT chk_timetable_day CHECK (day_of_week BETWEEN 1 AND 7), CONSTRAINT chk_timetable_time CHECK (end_time > start_time), CONSTRAINT fk_timetable_student FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE, CONSTRAINT fk_timetable_module FOREIGN KEY (module_code) REFERENCES modules(module_code) ON DELETE CASCADE, UNIQUE KEY uq_timetable_slot (student_id, day_of_week, start_time))",
             "CREATE TABLE IF NOT EXISTS announcements (id INT PRIMARY KEY, title VARCHAR(160) NOT NULL, message VARCHAR(1000) NOT NULL, published_on DATE NOT NULL, due_date DATE NULL)"
@@ -104,8 +105,33 @@ final class DatabaseStore {
         }
     }
 
-    static char[] defaultStudentTemporaryPassword() {
-        return DEFAULT_STUDENT_TEMPORARY_PASSWORD.toCharArray();
+    void provisionLecturerAccount(int lecturerId, String passwordHash) throws SQLException {
+        try (Connection connection = connect();
+                PreparedStatement statement = connection.prepareStatement(
+                        "INSERT INTO lecturer_accounts (lecturer_id, password_hash, must_change_password) "
+                                + "VALUES (?, ?, TRUE) ON DUPLICATE KEY UPDATE "
+                                + "password_hash = VALUES(password_hash), must_change_password = TRUE")) {
+            statement.setInt(1, lecturerId);
+            statement.setString(2, passwordHash);
+            statement.executeUpdate();
+        }
+    }
+
+    void changeLecturerPassword(int lecturerId, String passwordHash) throws SQLException {
+        try (Connection connection = connect();
+                PreparedStatement statement = connection.prepareStatement(
+                        "UPDATE lecturer_accounts SET password_hash = ?, must_change_password = FALSE "
+                                + "WHERE lecturer_id = ?")) {
+            statement.setString(1, passwordHash);
+            statement.setInt(2, lecturerId);
+            if (statement.executeUpdate() != 1) {
+                throw new SQLException("The lecturer account no longer exists. Ask the administrator to create it again.");
+            }
+        }
+    }
+
+    static char[] defaultTemporaryPassword() {
+        return DEFAULT_TEMPORARY_PASSWORD.toCharArray();
     }
 
     private void deleteRemovedStudents(Connection connection, List<PortalData.Student> students)
@@ -323,7 +349,9 @@ final class DatabaseStore {
         List<PortalData.Lecturer> lecturers = new ArrayList<PortalData.Lecturer>();
         try (Connection connection = connect();
                 PreparedStatement statement = connection.prepareStatement(
-                        "SELECT id, first_name, surname, email FROM lecturers ORDER BY id");
+                        "SELECT l.id, l.first_name, l.surname, l.email, a.password_hash, a.must_change_password "
+                                + "FROM lecturers l LEFT JOIN lecturer_accounts a ON a.lecturer_id = l.id "
+                                + "ORDER BY l.id");
                 ResultSet results = statement.executeQuery()) {
             while (results.next()) {
                 PortalData.Lecturer lecturer = new PortalData.Lecturer(
@@ -331,6 +359,8 @@ final class DatabaseStore {
                         results.getString("first_name"),
                         results.getString("surname"),
                         results.getString("email"));
+                lecturer.passwordHash = results.getString("password_hash");
+                lecturer.mustChangePassword = results.getBoolean("must_change_password");
                 lecturers.add(lecturer);
             }
         }

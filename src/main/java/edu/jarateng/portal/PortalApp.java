@@ -70,6 +70,10 @@ public final class PortalApp {
     private JPanel navigation;
     private String currentPage = "Overview";
 
+    private interface PasswordUpdater {
+        void update(char[] password) throws SQLException;
+    }
+
     private static final class PortalUser {
         final String role;
         final String name;
@@ -176,7 +180,7 @@ public final class PortalApp {
         form.add(Box.createVerticalStrut(7));
         form.add(label(data.isSessionOnlyDemo()
                 ? "Use a demo account to open a role-specific workspace."
-                : "Students sign in with their student number and password.", 13, MUTED, Font.PLAIN));
+                : "Students use their student number; lecturers use their email address.", 13, MUTED, Font.PLAIN));
         if (data.isSessionOnlyDemo()) {
             form.add(Box.createVerticalStrut(8));
             form.add(label("SESSION-ONLY DEMO  ·  Changes are not saved after closing.", 11,
@@ -247,7 +251,7 @@ public final class PortalApp {
             demo.setAlignmentX(Component.LEFT_ALIGNMENT);
             form.add(demo);
         } else {
-            form.add(label("Student accounts are created from the administrator's Students page.",
+            form.add(label("Student and lecturer accounts are created from their administrator directory pages.",
                     11, MUTED, Font.PLAIN));
         }
 
@@ -264,9 +268,11 @@ public final class PortalApp {
                         if (student != null) {
                             authenticated = new PortalUser("Student", student.fullName(), student.id);
                         }
-                    } else if ("Lecturer".equals(selected) && DEMO_LECTURER_USERNAME.equals(account)
-                            && DEMO_LECTURER_PASSWORD.equals(new String(secret))) {
-                        authenticated = new PortalUser("Lecturer", "Morgan Lane", 1);
+                    } else if ("Lecturer".equals(selected)) {
+                        PortalData.Lecturer lecturer = data.authenticateLecturer(account, secret);
+                        if (lecturer != null) {
+                            authenticated = new PortalUser("Lecturer", lecturer.fullName(), lecturer.id);
+                        }
                     } else if ("Administrator".equals(selected)) {
                         PortalData.Administrator administrator =
                                 data.authenticateAdministrator(account, secret);
@@ -295,9 +301,13 @@ public final class PortalApp {
                     }
                     if (student.mustChangePassword && !changeStudentPasswordDialog(student, true)) return;
                 }
-                if ("Lecturer".equals(authenticated.role) && data.lecturer(authenticated.id) == null) {
-                    error.setText("The demo lecturer account has no record in the faculty directory.");
-                    return;
+                if ("Lecturer".equals(authenticated.role)) {
+                    PortalData.Lecturer lecturer = data.lecturer(authenticated.id);
+                    if (lecturer == null) {
+                        error.setText("This lecturer account has no matching faculty record.");
+                        return;
+                    }
+                    if (lecturer.mustChangePassword && !changeLecturerPasswordDialog(lecturer, true)) return;
                 }
                 user = authenticated;
                 currentPage = "Overview";
@@ -418,7 +428,7 @@ public final class PortalApp {
             return Arrays.asList("Overview", "Students", "Courses", "Lecturers", "Announcements");
         }
         if ("Lecturer".equals(user.role)) {
-            return Arrays.asList("Overview", "My students", "Capture marks", "Announcements");
+            return Arrays.asList("Overview", "My students", "Capture marks", "Announcements", "My profile");
         }
         return Arrays.asList("Overview", "My modules", "Timetable", "Academic results",
                 "Announcements", "My profile");
@@ -473,7 +483,9 @@ public final class PortalApp {
             case "Timetable": body.add(studentTimetable()); break;
             case "Academic results": body.add(studentResults()); break;
             case "Announcements": body.add(announcementsPage("Administrator".equals(user.role))); break;
-            case "My profile": body.add(studentProfile()); break;
+            case "My profile":
+                body.add("Lecturer".equals(user.role) ? lecturerProfile() : studentProfile());
+                break;
             default: body.add(new JLabel("This page is not available."));
         }
         content.add(body, BorderLayout.NORTH);
@@ -491,6 +503,7 @@ public final class PortalApp {
         if ("Timetable".equals(page)) return "Plan your module week and check for overlapping classes.";
         if ("Academic results".equals(page)) return "Assessment results recorded against your modules.";
         if ("Announcements".equals(page)) return "Campus notices and upcoming deadlines.";
+        if ("My profile".equals(page)) return "Your " + user.role.toLowerCase() + " account details and password.";
         return "Your student number and current registration details.";
     }
 
@@ -769,7 +782,7 @@ public final class PortalApp {
                     "Reset student password", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
             if (answer != JOptionPane.YES_OPTION) return;
         }
-        char[] temporaryPassword = DatabaseStore.defaultStudentTemporaryPassword();
+        char[] temporaryPassword = DatabaseStore.defaultTemporaryPassword();
         try {
             data.provisionStudentAccount(selected, temporaryPassword);
             String issuedPassword = new String(temporaryPassword);
@@ -1143,19 +1156,26 @@ public final class PortalApp {
 
     private JPanel lecturersPage() {
         JPanel page = verticalPanel();
-        Object[][] rows = new Object[data.lecturers.size()][4];
+        Object[][] rows = new Object[data.lecturers.size()][5];
         for (int i = 0; i < data.lecturers.size(); i++) {
             PortalData.Lecturer lecturer = data.lecturers.get(i);
-            rows[i] = new Object[] { lecturer.fullName(), lecturer.email, lecturer.modules.size(), String.join(", ", lecturer.modules) };
+            rows[i] = new Object[] { lecturer.fullName(), lecturer.email, lecturer.modules.size(),
+                    String.join(", ", lecturer.modules), lecturer.hasAccount()
+                            ? (lecturer.mustChangePassword ? "Password setup pending" : "Active")
+                            : "Not created" };
         }
-        JTable lecturerTable = table(new String[] { "Lecturer", "Email address", "Modules", "Teaching allocation" }, rows);
+        JTable lecturerTable = table(new String[] {
+                "Lecturer", "Email address", "Modules", "Teaching allocation", "Portal account"
+        }, rows);
         lecturerTable.putClientProperty("portal.lecturers", data.lecturers);
         JPanel directory = tablePanel(lecturerTable);
         JPanel actions = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 10));
         actions.setOpaque(false);
         JButton add = primaryButton("Add lecturer");
+        JButton account = secondaryButton("Create / reset login");
         JButton remove = secondaryButton("Delete selected");
         add.addActionListener(event -> lecturerDialog());
+        account.addActionListener(event -> createOrResetLecturerAccount(lecturerTable));
         remove.addActionListener(event -> {
             int row = lecturerTable.getSelectedRow();
             if (row < 0) {
@@ -1183,12 +1203,55 @@ public final class PortalApp {
             }
         });
         actions.add(add);
+        actions.add(account);
         actions.add(remove);
         directory.add(actions, BorderLayout.SOUTH);
         page.add(section("Faculty directory", directory));
         page.add(Box.createVerticalStrut(12));
-        page.add(notePanel("Lecturer accounts", "Assign lecturers to modules from Courses. The demo sign-in remains limited to the built-in lecturer account."));
+        page.add(notePanel("Lecturer accounts",
+                "Lecturers sign in with their email address. New or reset accounts must set a private password at first sign-in."));
         return page;
+    }
+
+    private void createOrResetLecturerAccount(JTable table) {
+        PortalData.Lecturer selected = selectedLecturer(table);
+        if (selected == null) return;
+        if (selected.hasAccount()) {
+            int answer = JOptionPane.showConfirmDialog(frame,
+                    "Reset the password for " + selected.fullName() + "?\n"
+                            + "Their current password will stop working and they must choose a new one at sign-in.",
+                    "Reset lecturer password", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+            if (answer != JOptionPane.YES_OPTION) return;
+        }
+        char[] temporaryPassword = DatabaseStore.defaultTemporaryPassword();
+        try {
+            data.provisionLecturerAccount(selected, temporaryPassword);
+            JOptionPane.showMessageDialog(frame,
+                    "Lecturer account ready.\n\nUsername: " + selected.email
+                            + "\nTemporary password: " + new String(temporaryPassword)
+                            + "\n\nThis default is shared by all student and lecturer accounts until changed. "
+                            + "Share it privately, and have the lecturer choose a private password at first sign-in."
+                            + (data.isSessionOnlyDemo() ? "\n\nDemo mode: this account is temporary for this session." : ""),
+                    "Lecturer login details", JOptionPane.INFORMATION_MESSAGE);
+            selectPage(currentPage);
+        } catch (SQLException error) {
+            showMessage("The lecturer account could not be saved.\n" + error.getMessage(),
+                    JOptionPane.ERROR_MESSAGE);
+        } finally {
+            Arrays.fill(temporaryPassword, '\0');
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private PortalData.Lecturer selectedLecturer(JTable table) {
+        int row = table.getSelectedRow();
+        if (row < 0) {
+            showMessage("Select a lecturer record first.", JOptionPane.INFORMATION_MESSAGE);
+            return null;
+        }
+        List<PortalData.Lecturer> lecturers =
+                (List<PortalData.Lecturer>) table.getClientProperty("portal.lecturers");
+        return lecturers.get(table.convertRowIndexToModel(row));
     }
 
     private void lecturerDialog() {
@@ -1579,7 +1642,34 @@ public final class PortalApp {
         return page;
     }
 
+    private JPanel lecturerProfile() {
+        PortalData.Lecturer lecturer = data.lecturer(user.id);
+        JPanel details = new JPanel(new GridLayout(0, 2, 14, 14));
+        details.setBackground(Color.WHITE);
+        details.setBorder(BorderFactory.createEmptyBorder(19, 20, 19, 20));
+        addDetail(details, "Full name", lecturer.fullName());
+        addDetail(details, "Email address / username", lecturer.email);
+        addDetail(details, "Assigned modules", String.valueOf(lecturer.modules.size()));
+        JPanel page = verticalPanel();
+        page.add(section("Lecturer profile", details));
+        page.add(Box.createVerticalStrut(12));
+        JButton changePassword = secondaryButton("Change my password");
+        changePassword.addActionListener(event -> changeLecturerPasswordDialog(lecturer, false));
+        page.add(leftAligned(changePassword));
+        return page;
+    }
+
     private boolean changeStudentPasswordDialog(PortalData.Student student, boolean firstLogin) {
+        return changeAccountPasswordDialog("student", firstLogin,
+                password -> data.changeStudentPassword(student, password));
+    }
+
+    private boolean changeLecturerPasswordDialog(PortalData.Lecturer lecturer, boolean firstLogin) {
+        return changeAccountPasswordDialog("lecturer", firstLogin,
+                password -> data.changeLecturerPassword(lecturer, password));
+    }
+
+    private boolean changeAccountPasswordDialog(String role, boolean firstLogin, PasswordUpdater updater) {
         JPasswordField newPassword = new CopyablePasswordField();
         JPasswordField confirmPassword = new CopyablePasswordField();
         styleField(newPassword);
@@ -1591,10 +1681,10 @@ public final class PortalApp {
         form.add(new JLabel("Confirm new password"));
         form.add(confirmPassword);
         int answer = JOptionPane.showConfirmDialog(frame, form,
-                firstLogin ? "Set your student password" : "Change your password",
+                firstLogin ? "Set your " + role + " password" : "Change your password",
                 JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
         if (answer != JOptionPane.OK_OPTION) {
-            if (firstLogin) showMessage("Set your password before continuing to the student workspace.",
+            if (firstLogin) showMessage("Set your password before continuing to the " + role + " workspace.",
                     JOptionPane.INFORMATION_MESSAGE);
             return false;
         }
@@ -1609,7 +1699,7 @@ public final class PortalApp {
                 showMessage("The passwords do not match. Please try again.", JOptionPane.WARNING_MESSAGE);
                 return false;
             }
-            data.changeStudentPassword(student, next);
+            updater.update(next);
             if (!firstLogin) {
                 showMessage("Your password has been changed.", JOptionPane.INFORMATION_MESSAGE);
                 selectPage(currentPage);
