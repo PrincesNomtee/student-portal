@@ -428,10 +428,11 @@ public final class PortalApp {
             return Arrays.asList("Overview", "Students", "Courses", "Lecturers", "Announcements");
         }
         if ("Lecturer".equals(user.role)) {
-            return Arrays.asList("Overview", "My students", "Capture marks", "Announcements", "My profile");
+            return Arrays.asList("Overview", "My students", "Capture marks", "Assessment tracker",
+                    "Announcements", "My profile");
         }
-        return Arrays.asList("Overview", "My modules", "Timetable", "Academic results",
-                "Announcements", "My profile");
+        return Arrays.asList("Overview", "My modules", "Assessment tracker", "Timetable",
+                "Academic results", "Announcements", "My profile");
     }
 
     private void selectPage(String page) {
@@ -479,6 +480,10 @@ public final class PortalApp {
             case "Lecturers": body.add(lecturersPage()); break;
             case "My students": body.add(lecturerStudents()); break;
             case "Capture marks": body.add(captureMarks()); break;
+            case "Assessment tracker":
+                body.add("Lecturer".equals(user.role)
+                        ? lecturerAssessmentTracker() : studentAssessmentTracker());
+                break;
             case "My modules": body.add(studentModules()); break;
             case "Timetable": body.add(studentTimetable()); break;
             case "Academic results": body.add(studentResults()); break;
@@ -499,6 +504,11 @@ public final class PortalApp {
         if ("Lecturers".equals(page)) return "Faculty directory and teaching allocations.";
         if ("My students".equals(page)) return "Students enrolled in the modules assigned to you.";
         if ("Capture marks".equals(page)) return "Record four assessment marks for an enrolled student.";
+        if ("Assessment tracker".equals(page)) {
+            return "Lecturer".equals(user.role)
+                    ? "Publish and manage assignments and exams for your modules."
+                    : "Track module deadlines and your personal assignment or exam reminders.";
+        }
         if ("My modules".equals(page)) return "Modules registered for your programme of study.";
         if ("Timetable".equals(page)) return "Plan your module week and check for overlapping classes.";
         if ("Academic results".equals(page)) return "Assessment results recorded against your modules.";
@@ -936,7 +946,7 @@ public final class PortalApp {
         JPanel moduleActions = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 10));
         moduleActions.setOpaque(false);
         JButton addModule = primaryButton("Create module");
-        JButton assignLecturer = secondaryButton("Assign lecturer to selected module");
+        JButton assignLecturer = secondaryButton("Assign lecturers to selected module");
         addModule.addActionListener(event -> moduleDialog());
         assignLecturer.addActionListener(event -> assignLecturerDialog(moduleTable));
         moduleActions.add(addModule);
@@ -945,7 +955,7 @@ public final class PortalApp {
         page.add(section("Curriculum modules", moduleDirectory));
         page.add(Box.createVerticalStrut(14));
         page.add(notePanel("Curriculum rules",
-                "A course can include many modules, and a module can be shared by multiple courses. Each module has at most one assigned lecturer."));
+                "Courses can share modules, and each module can be assigned to multiple lecturers."));
         return page;
     }
 
@@ -994,14 +1004,16 @@ public final class PortalApp {
         courseList.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
         JScrollPane courseScroll = new JScrollPane(courseList);
         courseScroll.setPreferredSize(new Dimension(320, 112));
-        JComboBox<String> lecturerBox = combo(lecturerOptions());
+        JList<String> lecturerList = lecturerSelection(new ArrayList<Integer>());
+        JScrollPane lecturerScroll = new JScrollPane(lecturerList);
+        lecturerScroll.setPreferredSize(new Dimension(320, 112));
 
         JPanel form = new JPanel(new GridLayout(0, 2, 10, 11));
         form.setBorder(BorderFactory.createEmptyBorder(10, 4, 8, 4));
         form.add(new JLabel("Module code")); form.add(codeField);
         form.add(new JLabel("Module name")); form.add(nameField);
         form.add(new JLabel("Courses (select one or more)")); form.add(courseScroll);
-        form.add(new JLabel("Lecturer")); form.add(lecturerBox);
+        form.add(new JLabel("Lecturers (select one or more)")); form.add(lecturerScroll);
         int answer = JOptionPane.showConfirmDialog(frame, form, "Create module",
                 JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
         if (answer != JOptionPane.OK_OPTION) return;
@@ -1021,8 +1033,8 @@ public final class PortalApp {
             showMessage("Select at least one course for this module.", JOptionPane.WARNING_MESSAGE);
             return;
         }
-        Integer lecturerId = lecturerIdForOption((String) lecturerBox.getSelectedItem());
-        PortalData.Module module = new PortalData.Module(code, name, lecturerId);
+        PortalData.Module module = new PortalData.Module(code, name);
+        module.lecturerIds.addAll(lecturerIdsForOptions(lecturerList.getSelectedValuesList()));
         data.modules.add(module);
         List<PortalData.Course> linkedCourses = new ArrayList<PortalData.Course>();
         for (String selected : selectedCourses) {
@@ -1088,20 +1100,23 @@ public final class PortalApp {
         List<PortalData.Module> modules =
                 (List<PortalData.Module>) moduleTable.getClientProperty("portal.modules");
         PortalData.Module module = modules.get(moduleTable.convertRowIndexToModel(row));
-        JComboBox<String> lecturerBox = combo(lecturerOptions());
-        lecturerBox.setSelectedItem(lecturerOption(module.lecturerId));
+        JList<String> lecturerList = lecturerSelection(module.lecturerIds);
+        JScrollPane lecturerScroll = new JScrollPane(lecturerList);
+        lecturerScroll.setPreferredSize(new Dimension(320, 144));
         JPanel form = new JPanel(new GridLayout(0, 2, 10, 11));
         form.setBorder(BorderFactory.createEmptyBorder(10, 4, 8, 4));
         form.add(new JLabel("Module")); form.add(new JLabel(module.code + " · " + module.name));
-        form.add(new JLabel("Lecturer")); form.add(lecturerBox);
-        int answer = JOptionPane.showConfirmDialog(frame, form, "Assign module lecturer",
+        form.add(new JLabel("Lecturers")); form.add(lecturerScroll);
+        int answer = JOptionPane.showConfirmDialog(frame, form, "Assign module lecturers",
                 JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
         if (answer != JOptionPane.OK_OPTION) return;
-        Integer previousId = module.lecturerId;
-        module.lecturerId = lecturerIdForOption((String) lecturerBox.getSelectedItem());
+        List<Integer> previousIds = new ArrayList<Integer>(module.lecturerIds);
+        module.lecturerIds.clear();
+        module.lecturerIds.addAll(lecturerIdsForOptions(lecturerList.getSelectedValuesList()));
         data.synchronizeLecturerModules();
-        if (!persistAndRefresh("Module lecturer assignment updated.")) {
-            module.lecturerId = previousId;
+        if (!persistAndRefresh("Module lecturer assignments updated.")) {
+            module.lecturerIds.clear();
+            module.lecturerIds.addAll(previousIds);
             data.synchronizeLecturerModules();
         }
     }
@@ -1116,19 +1131,25 @@ public final class PortalApp {
         return options;
     }
 
-    private Integer lecturerIdForOption(String option) {
-        if (option == null || "Unassigned".equals(option)) return null;
-        int separator = option.indexOf(" · ");
-        if (separator < 0) return null;
-        return Integer.valueOf(option.substring(0, separator));
+    private JList<String> lecturerSelection(List<Integer> selectedLecturerIds) {
+        JList<String> lecturerList = new JList<String>(lecturerOptions());
+        lecturerList.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
+        lecturerList.setVisibleRowCount(Math.min(6, Math.max(3, data.lecturers.size())));
+        for (int i = 0; i < data.lecturers.size(); i++) {
+            if (selectedLecturerIds.contains(data.lecturers.get(i).id)) {
+                lecturerList.addSelectionInterval(i, i);
+            }
+        }
+        return lecturerList;
     }
 
-    private String lecturerOption(Integer lecturerId) {
-        if (lecturerId == null) return "Unassigned";
-        for (PortalData.Lecturer lecturer : data.lecturers) {
-            if (lecturer.id == lecturerId) return lecturer.id + " · " + lecturer.fullName();
+    private List<Integer> lecturerIdsForOptions(List<String> options) {
+        List<Integer> lecturerIds = new ArrayList<Integer>();
+        for (String option : options) {
+            int separator = option.indexOf(" · ");
+            if (separator >= 0) lecturerIds.add(Integer.valueOf(option.substring(0, separator)));
         }
-        return "Unassigned";
+        return lecturerIds;
     }
 
     private PortalData.Course selectedCourse(JTable table) {
@@ -1361,6 +1382,341 @@ public final class PortalApp {
         page.add(section);
         loadScores.run();
         return page;
+    }
+
+    private JPanel lecturerAssessmentTracker() {
+        JPanel page = verticalPanel();
+        PortalData.Lecturer lecturer = data.lecturer(user.id);
+        List<PortalData.Assessment> assessments = new ArrayList<PortalData.Assessment>();
+        for (PortalData.Assessment assessment : data.assessments) {
+            if (lecturer.modules.contains(assessment.moduleCode)) assessments.add(assessment);
+        }
+        assessments.sort(Comparator.comparing((PortalData.Assessment item) -> item.dueDate)
+                .thenComparing(item -> item.title, String.CASE_INSENSITIVE_ORDER));
+        Object[][] rows = new Object[assessments.size()][5];
+        for (int i = 0; i < assessments.size(); i++) {
+            PortalData.Assessment assessment = assessments.get(i);
+            rows[i] = new Object[] { assessment.dueDate.format(DATE_FORMAT), assessment.moduleCode,
+                    assessment.type, assessment.title, assessment.details };
+        }
+        JTable table = table(new String[] { "Due date", "Module", "Type", "Assignment / exam", "Details" }, rows);
+        table.putClientProperty("portal.assessments", assessments);
+        JPanel content = tablePanel(table);
+        JPanel actions = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 10));
+        actions.setOpaque(false);
+        JButton add = primaryButton("Add assignment or exam");
+        JButton edit = secondaryButton("Edit selected");
+        JButton remove = secondaryButton("Remove selected");
+        add.addActionListener(event -> assessmentDialog(null, lecturer));
+        edit.addActionListener(event -> assessmentDialog(selectedAssessment(table), lecturer));
+        remove.addActionListener(event -> removeAssessment(table));
+        actions.add(add);
+        actions.add(edit);
+        actions.add(remove);
+        content.add(actions, BorderLayout.SOUTH);
+        page.add(section("Assessments for my modules", content));
+        page.add(Box.createVerticalStrut(12));
+        page.add(notePanel("Publishing assessments",
+                "Students registered in a module see its assignments and exams in their tracker. They can update their own progress."));
+        return page;
+    }
+
+    @SuppressWarnings("unchecked")
+    private PortalData.Assessment selectedAssessment(JTable table) {
+        int row = table.getSelectedRow();
+        if (row < 0) {
+            showMessage("Select an assignment or exam first.", JOptionPane.INFORMATION_MESSAGE);
+            return null;
+        }
+        List<PortalData.Assessment> assessments =
+                (List<PortalData.Assessment>) table.getClientProperty("portal.assessments");
+        return assessments.get(table.convertRowIndexToModel(row));
+    }
+
+    private void assessmentDialog(PortalData.Assessment existing, PortalData.Lecturer lecturer) {
+        if (lecturer.modules.isEmpty()) {
+            showMessage("You need an assigned module before you can publish an assignment or exam.",
+                    JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        String[] moduleOptions = lecturer.modules.toArray(new String[0]);
+        JComboBox<String> module = combo(moduleOptions);
+        JComboBox<String> type = combo(new String[] { "Assignment", "Exam" });
+        JTextField title = field("");
+        JTextField dueDate = field(LocalDate.now().plusDays(7).format(DATE_FORMAT));
+        JTextArea details = new JTextArea(4, 28);
+        details.setLineWrap(true);
+        details.setWrapStyleWord(true);
+        if (existing != null) {
+            module.setSelectedItem(existing.moduleCode);
+            type.setSelectedItem(existing.type);
+            title.setText(existing.title);
+            dueDate.setText(existing.dueDate.format(DATE_FORMAT));
+            details.setText(existing.details);
+        }
+        JPanel form = new JPanel(new GridLayout(0, 1, 7, 7));
+        form.setBorder(BorderFactory.createEmptyBorder(10, 4, 8, 4));
+        form.add(new JLabel("Module"));
+        form.add(module);
+        form.add(new JLabel("Type"));
+        form.add(type);
+        form.add(new JLabel("Title"));
+        form.add(title);
+        form.add(new JLabel("Due date (YYYY-MM-DD)"));
+        form.add(dueDate);
+        form.add(new JLabel("Instructions or notes (optional, up to 1,000 characters)"));
+        form.add(new JScrollPane(details));
+        int answer = JOptionPane.showConfirmDialog(frame, form,
+                existing == null ? "Add assignment or exam" : "Edit assignment or exam",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        if (answer != JOptionPane.OK_OPTION) return;
+
+        String selectedModule = (String) module.getSelectedItem();
+        String assessmentTitle = title.getText().trim();
+        String assessmentDetails = details.getText().trim();
+        if (selectedModule == null || assessmentTitle.isEmpty() || assessmentTitle.length() > 160
+                || assessmentDetails.length() > 1000) {
+            showMessage("Choose a module and enter a title (up to 160 characters) and notes (up to 1,000 characters).",
+                    JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        LocalDate parsedDueDate;
+        try {
+            parsedDueDate = LocalDate.parse(dueDate.getText().trim(), DATE_FORMAT);
+        } catch (DateTimeParseException error) {
+            showMessage("Enter the due date in YYYY-MM-DD format.", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        PortalData.Assessment assessment = new PortalData.Assessment(
+                existing == null ? data.nextAssessmentId() : existing.id,
+                selectedModule, (String) type.getSelectedItem(), assessmentTitle,
+                parsedDueDate, assessmentDetails);
+        int index = existing == null ? -1 : data.assessments.indexOf(existing);
+        if (existing == null) data.assessments.add(assessment);
+        else data.assessments.set(index, assessment);
+        if (!persistAndRefresh(existing == null ? "Assignment or exam published to the module."
+                : "Assignment or exam updated.")) {
+            if (existing == null) data.assessments.remove(assessment);
+            else data.assessments.set(index, existing);
+        }
+    }
+
+    private void removeAssessment(JTable table) {
+        PortalData.Assessment selected = selectedAssessment(table);
+        if (selected == null) return;
+        int answer = JOptionPane.showConfirmDialog(frame,
+                "Remove \"" + selected.title + "\"? Student progress for this item will also be removed.",
+                "Remove assignment or exam", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+        if (answer != JOptionPane.YES_OPTION) return;
+        int index = data.assessments.indexOf(selected);
+        List<PortalData.AssessmentProgress> removedProgress = new ArrayList<PortalData.AssessmentProgress>();
+        for (PortalData.AssessmentProgress progress : new ArrayList<PortalData.AssessmentProgress>(
+                data.assessmentProgress)) {
+            if (progress.assessmentId == selected.id) {
+                removedProgress.add(progress);
+                data.assessmentProgress.remove(progress);
+            }
+        }
+        data.assessments.remove(selected);
+        if (!persistAndRefresh("Assignment or exam removed.")) {
+            data.assessments.add(index, selected);
+            data.assessmentProgress.addAll(removedProgress);
+        }
+    }
+
+    private JPanel studentAssessmentTracker() {
+        JPanel page = verticalPanel();
+        PortalData.Student student = data.student(user.id);
+        PortalData.Course course = data.course(student.courseCode);
+        List<String> moduleCodes = course == null ? new ArrayList<String>() : course.modules;
+        List<PortalData.Assessment> assessments = new ArrayList<PortalData.Assessment>();
+        for (PortalData.Assessment assessment : data.assessments) {
+            if (moduleCodes.contains(assessment.moduleCode)) assessments.add(assessment);
+        }
+        assessments.sort(Comparator.comparing((PortalData.Assessment item) -> item.dueDate)
+                .thenComparing(item -> item.title, String.CASE_INSENSITIVE_ORDER));
+        Object[][] assessmentRows = new Object[assessments.size()][6];
+        for (int i = 0; i < assessments.size(); i++) {
+            PortalData.Assessment assessment = assessments.get(i);
+            assessmentRows[i] = new Object[] { assessment.dueDate.format(DATE_FORMAT), assessment.moduleCode,
+                    data.moduleName(assessment.moduleCode), assessment.type, assessment.title,
+                    data.assessmentStatus(student.id, assessment.id) };
+        }
+        JTable assessmentTable = table(new String[] {
+                "Due date", "Module", "Module name", "Type", "Assignment / exam", "My progress"
+        }, assessmentRows);
+        assessmentTable.putClientProperty("portal.assessments", assessments);
+        JPanel assessmentContent = tablePanel(assessmentTable);
+        JPanel assessmentActions = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 10));
+        assessmentActions.setOpaque(false);
+        JButton updateProgress = secondaryButton("Update my progress");
+        updateProgress.addActionListener(event -> updateAssessmentProgress(assessmentTable, student));
+        assessmentActions.add(updateProgress);
+        assessmentContent.add(assessmentActions, BorderLayout.SOUTH);
+        page.add(section("Module assignments and exams", assessmentContent));
+        page.add(Box.createVerticalStrut(14));
+
+        List<PortalData.StudentTask> tasks = new ArrayList<PortalData.StudentTask>();
+        for (PortalData.StudentTask task : data.studentTasks) {
+            if (task.studentId == student.id) tasks.add(task);
+        }
+        tasks.sort(Comparator.comparing((PortalData.StudentTask task) -> task.dueDate)
+                .thenComparing(task -> task.title, String.CASE_INSENSITIVE_ORDER));
+        Object[][] taskRows = new Object[tasks.size()][5];
+        for (int i = 0; i < tasks.size(); i++) {
+            PortalData.StudentTask task = tasks.get(i);
+            taskRows[i] = new Object[] { task.dueDate.format(DATE_FORMAT),
+                    task.moduleCode == null ? "Personal" : task.moduleCode,
+                    task.type, task.title, task.status };
+        }
+        JTable taskTable = table(new String[] { "Due date", "Module", "Type", "Personal reminder", "Status" },
+                taskRows);
+        taskTable.putClientProperty("portal.studentTasks", tasks);
+        JPanel taskContent = tablePanel(taskTable);
+        JPanel taskActions = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 10));
+        taskActions.setOpaque(false);
+        JButton addTask = primaryButton("Add personal reminder");
+        JButton editTask = secondaryButton("Edit selected");
+        JButton removeTask = secondaryButton("Remove selected");
+        addTask.addActionListener(event -> studentTaskDialog(null, student, moduleCodes));
+        editTask.addActionListener(event -> studentTaskDialog(selectedStudentTask(taskTable), student, moduleCodes));
+        removeTask.addActionListener(event -> removeStudentTask(taskTable));
+        taskActions.add(addTask);
+        taskActions.add(editTask);
+        taskActions.add(removeTask);
+        taskContent.add(taskActions, BorderLayout.SOUTH);
+        page.add(section("My personal assignment and exam reminders", taskContent));
+        page.add(Box.createVerticalStrut(12));
+        page.add(notePanel("Progress tracking",
+                "Published module assessments are visible to students taking that module. Personal reminders are private to your student account."));
+        return page;
+    }
+
+    private void updateAssessmentProgress(JTable table, PortalData.Student student) {
+        PortalData.Assessment assessment = selectedAssessment(table);
+        if (assessment == null) return;
+        String previousStatus = data.assessmentStatus(student.id, assessment.id);
+        PortalData.AssessmentProgress previousProgress = null;
+        for (PortalData.AssessmentProgress progress : data.assessmentProgress) {
+            if (progress.studentId == student.id && progress.assessmentId == assessment.id) {
+                previousProgress = progress;
+                break;
+            }
+        }
+        JComboBox<String> status = combo(new String[] { "Not started", "In progress", "Completed" });
+        status.setSelectedItem(previousStatus);
+        int answer = JOptionPane.showConfirmDialog(frame, status, "Update your progress",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        if (answer != JOptionPane.OK_OPTION) return;
+        String nextStatus = (String) status.getSelectedItem();
+        data.setAssessmentStatus(student.id, assessment.id, nextStatus);
+        if (!persistAndRefresh("Your progress was updated.")) {
+            data.setAssessmentStatus(student.id, assessment.id,
+                    previousProgress == null ? null : previousStatus);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private PortalData.StudentTask selectedStudentTask(JTable table) {
+        int row = table.getSelectedRow();
+        if (row < 0) {
+            showMessage("Select a personal reminder first.", JOptionPane.INFORMATION_MESSAGE);
+            return null;
+        }
+        List<PortalData.StudentTask> tasks =
+                (List<PortalData.StudentTask>) table.getClientProperty("portal.studentTasks");
+        return tasks.get(table.convertRowIndexToModel(row));
+    }
+
+    private String[] studentTaskModuleOptions(List<String> moduleCodes) {
+        String[] options = new String[moduleCodes.size() + 1];
+        options[0] = "Personal / no module";
+        for (int i = 0; i < moduleCodes.size(); i++) {
+            String code = moduleCodes.get(i);
+            options[i + 1] = code + " · " + data.moduleName(code);
+        }
+        return options;
+    }
+
+    private void studentTaskDialog(PortalData.StudentTask existing, PortalData.Student student,
+            List<String> moduleCodes) {
+        JComboBox<String> module = combo(studentTaskModuleOptions(moduleCodes));
+        JComboBox<String> type = combo(new String[] { "Assignment", "Exam" });
+        JComboBox<String> status = combo(new String[] { "Not started", "In progress", "Completed" });
+        JTextField title = field("");
+        JTextField dueDate = field(LocalDate.now().plusDays(7).format(DATE_FORMAT));
+        JTextArea details = new JTextArea(4, 28);
+        details.setLineWrap(true);
+        details.setWrapStyleWord(true);
+        if (existing != null) {
+            if (existing.moduleCode != null) module.setSelectedItem(
+                    existing.moduleCode + " · " + data.moduleName(existing.moduleCode));
+            type.setSelectedItem(existing.type);
+            title.setText(existing.title);
+            dueDate.setText(existing.dueDate.format(DATE_FORMAT));
+            details.setText(existing.details);
+            status.setSelectedItem(existing.status);
+        }
+        JPanel form = new JPanel(new GridLayout(0, 1, 7, 7));
+        form.setBorder(BorderFactory.createEmptyBorder(10, 4, 8, 4));
+        form.add(new JLabel("Related module (optional)"));
+        form.add(module);
+        form.add(new JLabel("Type"));
+        form.add(type);
+        form.add(new JLabel("Title"));
+        form.add(title);
+        form.add(new JLabel("Due date (YYYY-MM-DD)"));
+        form.add(dueDate);
+        form.add(new JLabel("Notes (optional, up to 1,000 characters)"));
+        form.add(new JScrollPane(details));
+        form.add(new JLabel("Status"));
+        form.add(status);
+        int answer = JOptionPane.showConfirmDialog(frame, form,
+                existing == null ? "Add personal reminder" : "Edit personal reminder",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        if (answer != JOptionPane.OK_OPTION) return;
+        String taskTitle = title.getText().trim();
+        String taskDetails = details.getText().trim();
+        if (taskTitle.isEmpty() || taskTitle.length() > 160 || taskDetails.length() > 1000) {
+            showMessage("Enter a title (up to 160 characters) and notes (up to 1,000 characters).",
+                    JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        LocalDate parsedDueDate;
+        try {
+            parsedDueDate = LocalDate.parse(dueDate.getText().trim(), DATE_FORMAT);
+        } catch (DateTimeParseException error) {
+            showMessage("Enter the due date in YYYY-MM-DD format.", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        String selectedModule = (String) module.getSelectedItem();
+        String moduleCode = selectedModule == null || selectedModule.startsWith("Personal /")
+                ? null : moduleCode(selectedModule);
+        PortalData.StudentTask task = new PortalData.StudentTask(
+                existing == null ? data.nextStudentTaskId() : existing.id, student.id, moduleCode,
+                (String) type.getSelectedItem(), taskTitle, parsedDueDate, taskDetails,
+                (String) status.getSelectedItem());
+        int index = existing == null ? -1 : data.studentTasks.indexOf(existing);
+        if (existing == null) data.studentTasks.add(task);
+        else data.studentTasks.set(index, task);
+        if (!persistAndRefresh(existing == null ? "Personal reminder added." : "Personal reminder updated.")) {
+            if (existing == null) data.studentTasks.remove(task);
+            else data.studentTasks.set(index, existing);
+        }
+    }
+
+    private void removeStudentTask(JTable table) {
+        PortalData.StudentTask selected = selectedStudentTask(table);
+        if (selected == null) return;
+        int answer = JOptionPane.showConfirmDialog(frame,
+                "Remove the personal reminder \"" + selected.title + "\"?",
+                "Remove reminder", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+        if (answer != JOptionPane.YES_OPTION) return;
+        int index = data.studentTasks.indexOf(selected);
+        data.studentTasks.remove(selected);
+        if (!persistAndRefresh("Personal reminder removed.")) {
+            data.studentTasks.add(index, selected);
+        }
     }
 
     private JPanel studentModules() {
@@ -1770,10 +2126,11 @@ public final class PortalApp {
     }
 
     private String lecturerFor(String module) {
+        List<String> names = new ArrayList<String>();
         for (PortalData.Lecturer lecturer : data.lecturers) {
-            if (lecturer.modules.contains(module)) return lecturer.fullName();
+            if (lecturer.modules.contains(module)) names.add(lecturer.fullName());
         }
-        return "Unassigned";
+        return names.isEmpty() ? "Unassigned" : String.join(", ", names);
     }
 
     private List<PortalData.Student> studentsFor(List<String> modules) {

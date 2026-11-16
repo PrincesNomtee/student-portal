@@ -52,8 +52,9 @@ the features shown in the application.
 
 The documentation identifies four stakeholder types. Administrators maintain
 student and academic records. Lecturers see their assigned modules and students
-and record assessment marks. Students view their own progress, modules,
-results, timetable, profile, and announcements. The system operator prepares
+and record assessment marks, and publish shared assignment and exam deadlines.
+Students view their own progress, modules, results, shared assessments, private
+reminders, timetable, profile, and announcements. The system operator prepares
 Java, Maven, and MySQL and looks after the database configuration and backups.
 
 This section also explains how demonstration accounts work. For example, a
@@ -68,7 +69,8 @@ system.
 [Show section 4, “System analysis.”]
 
 The system analysis explains what users can do and the rules the application
-should follow.
+should follow, including lecturer-published module assessments, individual
+student progress states, and private student reminders.
 
 First, the functional requirements use IDs such as FR-01 and FR-02 to identify
 specific capabilities. They cover the overview, student registration and
@@ -128,12 +130,16 @@ constraints. Primary keys identify records, foreign keys connect related
 records, and unique keys prevent duplicate values such as student numbers.
 For example, `assessment_marks` identifies a student's mark for a particular
 module and assessment, with checks for the permitted assessment number and
-score range.
+score range. The `assessments` table stores shared module assignment and exam
+deadlines, `student_assessment_progress` stores each student's progress for
+those deadlines, and `student_tasks` stores private student reminders.
 
 The relationship rules add meaning to the diagram. A course can share modules
-with other courses, while each module can have at most one lecturer. Timetable
-entries are personal planning information, not an official institutional
-schedule. These rules help explain how the application avoids inconsistent
+with other courses, and a module can be assigned to multiple lecturers.
+Timetable entries are personal planning information, not an official
+institutional schedule. Shared assessments are visible to students taking a
+module, while each progress state and personal reminder belongs to one
+student. These rules help explain how the application avoids inconsistent
 relationships.
 
 ## 8. Class diagram and design
@@ -142,8 +148,9 @@ relationships.
 
 The class diagram describes the main software components and how they relate.
 `PortalApp` is responsible for the Swing interface. `PortalData` groups the
-application's in-memory information, such as students, courses, modules, and
-announcements. `DatabaseStore` handles persistent database access, while
+application's in-memory information, such as students, courses, modules,
+announcements, assessments, progress states, and private reminders.
+`DatabaseStore` handles persistent database access, while
 `CsvStore` supports legacy file import.
 
 The responsibility table gives a short explanation of each class and model.

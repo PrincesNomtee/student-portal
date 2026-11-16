@@ -2,7 +2,7 @@
 
 ## 1. Purpose and scope
 
-The Student Registration System is a Java desktop demonstration for managing student records, academic programmes, lecturers, module allocations, assessment marks, personal timetable plans, and campus announcements. It uses a Swing graphical interface and stores application data in a local MySQL database.
+The Student Registration System is a Java desktop demonstration for managing student records, academic programmes, lecturers, module allocations, assessment marks, shared assignment and exam deadlines, private student reminders, personal timetable plans, and campus announcements. It uses a Swing graphical interface and stores application data in a local MySQL database.
 
 This document describes the current implementation for learning and system-analysis purposes. It is not a production specification: authentication, role management, data governance, backups, and operational controls are simplified or incomplete.
 
@@ -11,6 +11,7 @@ This document describes the current implementation for learning and system-analy
 - Keep a central register of students and their programme registrations.
 - Let an administrator maintain student and lecturer records.
 - Give students a progress dashboard, assessment insights, next steps, and a personal timetable.
+- Let lecturers publish module assignments and exams, and let students track shared assessment progress or create private reminders.
 - Let administrators publish campus announcements and deadline reminders for students.
 - Show students the modules in their programme and their assessment results.
 - Let lecturers view students in assigned modules and capture marks.
@@ -20,9 +21,9 @@ This document describes the current implementation for learning and system-analy
 
 | Stakeholder | Current system capabilities |
 | --- | --- |
-| Administrator | View an overview; add, edit, and remove student records; create courses and modules; assign modules to courses and a single lecturer; add and remove lecturers; publish and remove campus announcements with optional deadlines. |
-| Lecturer | View allocated modules and students in those modules; capture up to four assessment marks per module; view campus announcements. |
-| Student | View a study dashboard, suggested next steps, assessment averages and trends, profile, programme modules, results, announcements, and a personal timetable with overlap checking. |
+| Administrator | View an overview; add, edit, and remove student records; create courses and modules; assign modules to courses and multiple lecturers; add and remove lecturers; publish and remove campus announcements with optional deadlines. |
+| Lecturer | View allocated modules and students in those modules; capture up to four assessment marks per module; publish and manage module assignments and exams; view campus announcements. |
+| Student | View a study dashboard, suggested next steps, assessment averages and trends, profile, programme modules, results, shared module assessments and progress, private reminders, announcements, and a personal timetable with overlap checking. |
 | System operator | Install Java, Maven, and MySQL; create the database; configure the database connection; back up the local database. |
 
 In normal MySQL-backed mode, student accounts are provisioned by an administrator from the student directory. The student number is the username; accounts use the shared temporary password `Welcome@1234`, which must be changed on first sign-in. Only its salted PBKDF2 hash is stored. Students can change their password from their profile, and administrators can reset an account to the shared temporary password. This shared password is for local demonstration only and is not appropriate for real or production accounts. The built-in student demo sign-in is limited to session-only demo mode; the lecturer demo sign-in remains built in. The administrator account is stored in MySQL with a salted PBKDF2 hash. This remains demonstration authentication, not a production identity or authorization system.
@@ -37,7 +38,7 @@ In normal MySQL-backed mode, student accounts are provisioned by an administrato
 | FR-02 | Register a student with a generated student number, contact details, programme, status, and enrollment date. | Administrator |
 | FR-03 | Edit or remove an existing student record. | Administrator |
 | FR-04 | Create courses and modules, assign one or more modules to a course, and share a module across courses. | Administrator |
-| FR-05 | Add and remove lecturers, assign at most one lecturer to each module, and view teaching allocations. | Administrator |
+| FR-05 | Add and remove lecturers, assign multiple lecturers to a module, and view teaching allocations. | Administrator |
 | FR-06 | View assigned modules and the students taking them. | Lecturer |
 | FR-07 | Capture four assessment marks per student and module. | Lecturer |
 | FR-08 | View a student's profile, modules, and marks. | Student |
@@ -47,6 +48,10 @@ In normal MySQL-backed mode, student accounts are provisioned by an administrato
 | FR-12 | Let administrators publish and remove campus announcements; let students and lecturers view them. | All |
 | FR-13 | Show student assessment averages, mark coverage, module status and available assessment trends; surface incomplete marks, low averages, registration status, and announcement deadlines as next steps. | Student |
 | FR-14 | Let administrators create or reset student accounts using a shared temporary password; require students to set a private password on first sign-in and allow later password changes. | Student / Administrator |
+| FR-15 | Let lecturers create, edit, and remove assignment and exam deadlines for modules they teach. | Lecturer |
+| FR-16 | Show students shared assessments for their programme modules and let each student track their own progress. | Student |
+| FR-17 | Let students create, edit, track, and remove private assignment or exam reminders, optionally linked to a programme module. | Student |
+| FR-18 | Persist shared assessments, per-student progress, and private reminders in MySQL. | System |
 
 ### 4.2 Quality attributes and constraints
 
@@ -70,10 +75,10 @@ In normal MySQL-backed mode, student accounts are provisioned by an administrato
 **Administrator maintains the curriculum**
 
 1. Open **Courses** and add a course using its unique code, name, and duration.
-2. Create modules with unique codes and names; choose one or more courses and optionally one lecturer.
+2. Create modules with unique codes and names; choose one or more courses and optionally one or more lecturers.
 3. Use **Assign modules to selected course** to share an existing module with additional courses.
-4. Use **Assign lecturer to selected module** to assign, change, or clear the module's single lecturer.
-5. The course/module relationship is stored in `course_modules`; the optional lecturer foreign key is stored on `modules`.
+4. Use **Assign lecturers to selected module** to add, change, or clear the module's lecturer assignments.
+5. Course/module relationships are stored in `course_modules`; module/lecturer relationships are stored in `module_lecturers`.
 6. In session-only demo mode, the same curriculum actions work in memory, and the UI warns that changes are temporary.
 
 **Lecturer records marks**
@@ -95,6 +100,21 @@ In normal MySQL-backed mode, student accounts are provisioned by an administrato
 2. Select an enrolled module, day, 24-hour start and end times, and optional location.
 3. The application rejects invalid time ranges and any overlap with another class on that day.
 4. The saved entry appears in the weekly timetable and remains available after signing in again.
+
+**Lecturer publishes an assessment and student tracks progress**
+
+1. Sign in to the Lecturer workspace and open **Assessment tracker**.
+2. Add an assignment or exam for an assigned module with a title, due date, and optional instructions.
+3. Students taking that module see the published assessment in their own tracker.
+4. A student selects the assessment and updates their progress to **Not started**, **In progress**, or **Completed**.
+5. The assessment is shared for the module; each student's progress is stored separately.
+
+**Student creates a private reminder**
+
+1. Sign in to the Student workspace and open **Assessment tracker**.
+2. Add a personal assignment or exam reminder, optionally choosing one of the student's modules.
+3. Set its due date, notes, and progress status. Edit or remove the reminder later from the same page.
+4. Personal reminders are visible only in that student's workspace.
 
 **Administrator publishes an announcement**
 
@@ -153,20 +173,30 @@ flowchart LR
     Modules["modules"]
     CourseModules["course_modules"]
     Lecturers["lecturers"]
+    ModuleLecturers["module_lecturers"]
     Marks["assessment_marks"]
     Admins["administrators"]
     Metadata["portal_metadata"]
     Timetable["timetable_entries"]
     Announcements["announcements"]
+    Assessments["assessments"]
+    AssessmentProgress["student_assessment_progress"]
+    StudentTasks["student_tasks"]
 
     Courses -->|"one programme has many students"| Students
     Courses -->|"programme module links"| CourseModules
     Modules -->|"module programme links"| CourseModules
-    Lecturers -->|"one lecturer may teach many modules"| Modules
+    Modules -->|"module lecturer links"| ModuleLecturers
+    Lecturers -->|"lecturer module links"| ModuleLecturers
     Students -->|"student assessment records"| Marks
     Modules -->|"module assessment records"| Marks
     Students -->|"personal weekly schedule"| Timetable
     Modules -->|"scheduled module"| Timetable
+    Modules -->|"published module work"| Assessments
+    Assessments -->|"per-student progress"| AssessmentProgress
+    Students -->|"tracks own progress"| AssessmentProgress
+    Students -->|"private reminders"| StudentTasks
+    Modules -->|"optional reminder module"| StudentTasks
 ```
 
 ### 6.1 Data dictionary
@@ -175,29 +205,35 @@ flowchart LR
 | --- | --- | --- |
 | `portal_metadata` | `metadata_key VARCHAR(64) PK`; `metadata_value VARCHAR(255) NOT NULL` | Stores the `application_initialized` marker used by the application startup flow. |
 | `courses` | `course_code VARCHAR(24) PK`; `course_name VARCHAR(180) NOT NULL`; `duration VARCHAR(40) NOT NULL` | Academic programmes offered by the demonstration application. |
-| `modules` | `module_code VARCHAR(24) PK`; `module_name VARCHAR(180) NOT NULL`; `lecturer_id INT NULL FK -> lecturers.id ON DELETE SET NULL` | Module catalogue; each module has zero or one assigned lecturer. |
+| `modules` | `module_code VARCHAR(24) PK`; `module_name VARCHAR(180) NOT NULL` | Module catalogue. |
 | `course_modules` | `course_code VARCHAR(24) FK`; `module_code VARCHAR(24) FK`; composite `PK(course_code, module_code)` | Resolves the many-to-many relationship between programmes and modules. |
+| `module_lecturers` | `module_code VARCHAR(24) FK -> modules.module_code ON DELETE CASCADE`; `lecturer_id INT FK -> lecturers.id ON DELETE CASCADE`; composite `PK(module_code, lecturer_id)` | Resolves the many-to-many relationship between modules and lecturers. |
 | `students` | `id INT PK`; `student_number VARCHAR(32) NOT NULL UK`; `first_name VARCHAR(100) NOT NULL`; `surname VARCHAR(100) NOT NULL`; `email VARCHAR(254) NOT NULL UK`; `course_code VARCHAR(24) NOT NULL FK`; `status VARCHAR(24) NOT NULL`; `enrollment_date DATE NOT NULL` | Student identity and registration information. The student ID is supplied by the application, not declared auto-increment. |
 | `student_accounts` | `student_id INT PK and FK -> students.id ON DELETE CASCADE`; `password_hash VARCHAR(255) NOT NULL`; `must_change_password BOOLEAN NOT NULL DEFAULT TRUE`; `updated_at TIMESTAMP` | Student sign-in credentials and first-login password-change flag. Only the PBKDF2 hash is stored. |
 | `lecturers` | `id INT PK`; `first_name VARCHAR(100) NOT NULL`; `surname VARCHAR(100) NOT NULL`; `email VARCHAR(254) NOT NULL UK` | Lecturer directory. |
 | `assessment_marks` | `student_id INT FK`; `module_code VARCHAR(24) FK`; `assessment_number TINYINT`; `score TINYINT UNSIGNED`; composite `PK(student_id, module_code, assessment_number)`; checks `assessment_number` 1-4 and `score` 0-100 | Stores each student's mark for one assessment in one module. Deleting a student cascades to their mark rows. |
 | `timetable_entries` | `id INT AUTO_INCREMENT PK`; `student_id INT FK`; `module_code VARCHAR(24) FK`; `day_of_week TINYINT` (1-7); `start_time TIME`; `end_time TIME`; `location VARCHAR(120)`; checks day and end-after-start; unique `(student_id, day_of_week, start_time)` | Stores a student's personal weekly planner entries; deleting a student or module cascades to their schedule rows. Overlap detection is performed by the application. |
 | `announcements` | `id INT PK`; `title VARCHAR(160) NOT NULL`; `message VARCHAR(1000) NOT NULL`; `published_on DATE NOT NULL`; `due_date DATE NULL` | Campus announcements managed by administrators; optional due dates are used in student reminders. |
+| `assessments` | `id INT PK`; `module_code VARCHAR(24) NOT NULL FK -> modules.module_code ON DELETE CASCADE`; `assessment_type VARCHAR(16) NOT NULL` (`Assignment` or `Exam`); `title VARCHAR(160) NOT NULL`; `due_date DATE NOT NULL`; `details VARCHAR(1000) NOT NULL` | Lecturer-published assignment and exam deadlines shared with students taking the module. |
+| `student_assessment_progress` | `assessment_id INT FK -> assessments.id ON DELETE CASCADE`; `student_id INT FK -> students.id ON DELETE CASCADE`; `status VARCHAR(16) NOT NULL` (`Not started`, `In progress`, or `Completed`); composite `PK(assessment_id, student_id)` | Stores each student's private progress status for a shared assessment. |
+| `student_tasks` | `id INT PK`; `student_id INT NOT NULL FK -> students.id ON DELETE CASCADE`; `module_code VARCHAR(24) NULL FK -> modules.module_code ON DELETE SET NULL`; `task_type VARCHAR(16) NOT NULL`; `title VARCHAR(160) NOT NULL`; `due_date DATE NOT NULL`; `details VARCHAR(1000) NOT NULL`; `status VARCHAR(16) NOT NULL` | Private assignment or exam reminders created by a student; a module association is optional. |
 | `administrators` | `id INT AUTO_INCREMENT PK`; `username VARCHAR(64) NOT NULL UK`; `first_name VARCHAR(100) NOT NULL`; `surname VARCHAR(100) NOT NULL`; `password_hash VARCHAR(255) NOT NULL`; `created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP` | Administrator sign-in identity and salted password hash. |
 
 ### 6.2 Relationship rules
 
 - One course can have many student records; each student record references one course.
 - Courses and modules have a many-to-many relationship through `course_modules`, allowing shared modules and multi-module courses.
-- Each module references at most one lecturer; a lecturer can teach multiple modules. The nullable foreign key keeps newly created or temporarily unassigned modules valid.
+- Modules and lecturers have a many-to-many relationship through `module_lecturers`; modules may be unassigned, and multiple lecturers can share teaching responsibility for one module.
 - A student can have marks for multiple modules, and a module can have marks for multiple students. `assessment_marks` stores the assessment number and score for each combination.
 - Timetable entries belong to one student and one module. The timetable is student-managed planning information, not an official institutional schedule.
+- A lecturer publishes shared assessments for an assigned module. Students registered in a course containing that module can see the assessment; progress is stored separately for each student.
+- A student can maintain private assignment or exam reminders. A reminder belongs to one student and may optionally reference a module; deleting the student cascades to reminders, while deleting the module clears the optional module reference.
 - Announcements are shared across roles; a nullable deadline supports student reminders without inventing due dates.
 - Administrator accounts, announcements, and startup metadata are independent of student registration records.
 - Each student may have one account. The student number is used as the login name; password hashes and the required-change flag are stored separately from profile data. Removing a student cascades to their account.
-- Foreign keys in `course_modules`, `modules`, `students`, `assessment_marks`, and `timetable_entries` enforce the relationships. Deleting a lecturer clears a module's assignment; deleting a student cascades to their marks and timetable entries.
-- Curriculum attributes are stored with their own primary keys; the course-module join contains only the two relationship keys. Lecturer assignment depends on the module key, avoiding duplicated lecturer data and the former many-to-many lecturer allocation table.
-- Startup migrates the former `lecturer_modules` table into `modules.lecturer_id`. If legacy data assigned multiple lecturers to one module, the migration retains the lowest lecturer ID to satisfy the single-lecturer rule.
+- Foreign keys in `course_modules`, `module_lecturers`, `students`, `assessment_marks`, and `timetable_entries` enforce the relationships. Deleting a lecturer or module cascades to its module assignment rows; deleting a student cascades to their marks and timetable entries.
+- Curriculum attributes are stored with their own primary keys; the course-module and module-lecturer joins contain only relationship keys.
+- Startup migrates assignments from the former `modules.lecturer_id` column and legacy `lecturer_modules` table into `module_lecturers`, preserving all valid lecturer assignments before removing the old single-lecturer column and legacy table.
 
 ## 7. Class diagram and design
 
@@ -211,11 +247,14 @@ flowchart LR
     Student["PortalData.Student<br/>id number email courseCode marks"]
     StudentAccount["student_accounts<br/>studentId passwordHash mustChangePassword"]
     Course["PortalData.Course<br/>code name duration modules"]
-    Module["PortalData.Module<br/>code name lecturerId"]
+    Module["PortalData.Module<br/>code name lecturerIds"]
     Lecturer["PortalData.Lecturer<br/>id name email modules"]
     Administrator["PortalData.Administrator<br/>id username name"]
     TimetableEntry["PortalData.TimetableEntry<br/>student module day start end location"]
     Announcement["PortalData.Announcement<br/>title message publishedOn dueDate"]
+    Assessment["PortalData.Assessment<br/>module type title dueDate details"]
+    AssessmentProgress["PortalData.AssessmentProgress<br/>assessment student status"]
+    StudentTask["PortalData.StudentTask<br/>student module type dueDate status"]
     DatabaseStore["DatabaseStore<br/>JDBC persistence"]
     CsvStore["CsvStore<br/>legacy CSV import"]
     DatabaseConnection["DatabaseConnection<br/>connection test"]
@@ -228,9 +267,18 @@ flowchart LR
     PortalData -->|"contains"| Lecturer
     PortalData -->|"contains"| TimetableEntry
     PortalData -->|"contains"| Announcement
+    PortalData -->|"contains"| Assessment
+    PortalData -->|"contains"| AssessmentProgress
+    PortalData -->|"contains"| StudentTask
     PortalData -->|"returns on authentication"| Administrator
     Student -->|"registered in"| Course
     Student -->|"may have one login"| StudentAccount
+    Assessment -->|"shared module deadline"| Module
+    AssessmentProgress -->|"per-student status"| Assessment
+    AssessmentProgress -->|"student progress"| Student
+    StudentTask -->|"private reminder"| Student
+    StudentTask -->|"optional module"| Module
+    Module -->|"assigned lecturer IDs"| Lecturer
     PortalData -->|"loads and saves through"| DatabaseStore
     DatabaseStore -->|"imports legacy files through"| CsvStore
     DatabaseStore -->|"JDBC operations"| MySQL
@@ -241,16 +289,19 @@ flowchart LR
 
 | Class | Responsibility |
 | --- | --- |
-| `PortalApp` | Creates the Swing login and role-specific workspaces; validates demo student/lecturer credentials; provides the progress dashboard, timetable overlap checks, announcement board, and persistence actions. |
-| `PortalData` | Holds students, courses, modules, lecturers, timetable entries, and announcements; provides lookups, sample data, and persistence delegation. |
+| `PortalApp` | Creates the Swing login and role-specific workspaces; validates demo student/lecturer credentials; provides the progress dashboard, timetable overlap checks, assessment tracker, announcement board, and persistence actions. |
+| `PortalData` | Holds students, courses, modules, lecturers, timetable entries, announcements, shared assessments, student progress, and private reminders; provides lookups, sample data, and persistence delegation. |
 | `PortalData.Student` | Represents a student and their per-module assessment scores in the in-memory model. |
 | `student_accounts` | Stores the student's PBKDF2 password hash and whether the temporary password must be changed. |
 | `PortalData.Course` | Represents a programme and its configured modules. |
-| `PortalData.Module` | Represents a module and its optional single lecturer assignment. |
+| `PortalData.Module` | Represents a module and its list of assigned lecturer IDs. |
 | `PortalData.Lecturer` | Represents a lecturer and their assigned modules. |
 | `PortalData.Administrator` | Carries the administrator identity returned after successful authentication. |
 | `PortalData.TimetableEntry` | Represents a student's weekly class slot and location. |
 | `PortalData.Announcement` | Represents a campus notice with its publication date and optional deadline. |
+| `PortalData.Assessment` | Represents an assignment or exam published for a module by a lecturer. |
+| `PortalData.AssessmentProgress` | Represents one student's progress status for a shared module assessment. |
+| `PortalData.StudentTask` | Represents a private student assignment or exam reminder, optionally linked to a module. |
 | `DatabaseStore` | Creates tables, authenticates administrators, reads/writes MySQL records, and imports legacy CSV data through `CsvStore`. |
 | `CsvStore` | Reads and writes legacy student and lecturer CSV files using UTF-8 and safe temporary-file replacement. Current database persistence is handled by `DatabaseStore`. |
 | `DatabaseConnection` | Provides a standalone UI-based check of the configured JDBC connection. |

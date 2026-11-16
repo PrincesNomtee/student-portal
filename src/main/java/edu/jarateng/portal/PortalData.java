@@ -68,12 +68,17 @@ final class PortalData {
     static final class Module {
         final String code;
         final String name;
-        Integer lecturerId;
+        final List<Integer> lecturerIds;
+
+        Module(String code, String name) {
+            this(code, name, (Integer) null);
+        }
 
         Module(String code, String name, Integer lecturerId) {
             this.code = code;
             this.name = name;
-            this.lecturerId = lecturerId;
+            this.lecturerIds = new ArrayList<Integer>();
+            if (lecturerId != null) this.lecturerIds.add(lecturerId);
         }
     }
 
@@ -150,12 +155,69 @@ final class PortalData {
         }
     }
 
+    static final class Assessment {
+        final int id;
+        final String moduleCode;
+        final String type;
+        final String title;
+        final LocalDate dueDate;
+        final String details;
+
+        Assessment(int id, String moduleCode, String type, String title,
+                LocalDate dueDate, String details) {
+            this.id = id;
+            this.moduleCode = moduleCode;
+            this.type = type;
+            this.title = title;
+            this.dueDate = dueDate;
+            this.details = details;
+        }
+    }
+
+    static final class AssessmentProgress {
+        final int assessmentId;
+        final int studentId;
+        String status;
+
+        AssessmentProgress(int assessmentId, int studentId, String status) {
+            this.assessmentId = assessmentId;
+            this.studentId = studentId;
+            this.status = status;
+        }
+    }
+
+    static final class StudentTask {
+        final int id;
+        final int studentId;
+        final String moduleCode;
+        final String type;
+        final String title;
+        final LocalDate dueDate;
+        final String details;
+        String status;
+
+        StudentTask(int id, int studentId, String moduleCode, String type, String title,
+                LocalDate dueDate, String details, String status) {
+            this.id = id;
+            this.studentId = studentId;
+            this.moduleCode = moduleCode;
+            this.type = type;
+            this.title = title;
+            this.dueDate = dueDate;
+            this.details = details;
+            this.status = status;
+        }
+    }
+
     final List<Student> students;
     final List<Course> courses;
     final List<Module> modules;
     final List<Lecturer> lecturers;
     final List<TimetableEntry> timetableEntries;
     final List<Announcement> announcements;
+    final List<Assessment> assessments;
+    final List<AssessmentProgress> assessmentProgress;
+    final List<StudentTask> studentTasks;
     private final DatabaseStore store;
     private final boolean sessionOnlyDemo;
 
@@ -168,6 +230,16 @@ final class PortalData {
     private PortalData(DatabaseStore store, List<Student> students, List<Lecturer> lecturers,
             List<Course> courses, List<Module> modules, List<TimetableEntry> timetableEntries,
             List<Announcement> announcements, boolean sessionOnlyDemo) {
+        this(store, students, lecturers, courses, modules, timetableEntries, announcements,
+                new ArrayList<Assessment>(), new ArrayList<AssessmentProgress>(),
+                new ArrayList<StudentTask>(), sessionOnlyDemo);
+    }
+
+    private PortalData(DatabaseStore store, List<Student> students, List<Lecturer> lecturers,
+            List<Course> courses, List<Module> modules, List<TimetableEntry> timetableEntries,
+            List<Announcement> announcements, List<Assessment> assessments,
+            List<AssessmentProgress> assessmentProgress, List<StudentTask> studentTasks,
+            boolean sessionOnlyDemo) {
         this.store = store;
         this.students = students;
         this.courses = courses;
@@ -175,6 +247,9 @@ final class PortalData {
         this.lecturers = lecturers;
         this.timetableEntries = timetableEntries;
         this.announcements = announcements;
+        this.assessments = assessments;
+        this.assessmentProgress = assessmentProgress;
+        this.studentTasks = studentTasks;
         this.sessionOnlyDemo = sessionOnlyDemo;
         synchronizeLecturerModules();
     }
@@ -234,20 +309,32 @@ final class PortalData {
         List<Module> modules = store.loadModules();
         List<TimetableEntry> timetableEntries = store.loadTimetableEntries();
         List<Announcement> announcements = store.loadAnnouncements();
+        List<Assessment> assessments = store.loadAssessments();
+        List<AssessmentProgress> assessmentProgress = store.loadAssessmentProgress();
+        List<StudentTask> studentTasks = store.loadStudentTasks();
         if (courses.isEmpty() && modules.isEmpty()) {
             courses = sampleCourses();
             modules = sampleModules();
         }
         PortalData data = new PortalData(store, students, lecturers, courses, modules,
-                timetableEntries, announcements, false);
+                timetableEntries, announcements, assessments, assessmentProgress, studentTasks, false);
         if (!store.isInitialized()) data.save();
         return data;
     }
 
     static PortalData demo() {
+        List<Assessment> assessments = new ArrayList<Assessment>(Arrays.asList(
+                new Assessment(1, "BDA201", "Assignment", "Data analysis case study",
+                        LocalDate.now().plusDays(7), "Analyse the sample business dataset and summarize your findings."),
+                new Assessment(2, "DPM202", "Exam", "Project management midterm",
+                        LocalDate.now().plusDays(14), "Review the project planning and delivery topics.")));
+        List<StudentTask> studentTasks = new ArrayList<StudentTask>(Arrays.asList(
+                new StudentTask(1, 1, "BDA201", "Assignment", "Review case study notes",
+                        LocalDate.now().plusDays(3), "Prepare questions for the next class.", "In progress")));
         return new PortalData(null, sampleStudents(), sampleLecturers(),
                 sampleCourses(), sampleModules(), new ArrayList<TimetableEntry>(),
-                new ArrayList<Announcement>(), true);
+                new ArrayList<Announcement>(), assessments, new ArrayList<AssessmentProgress>(),
+                studentTasks, true);
     }
 
     boolean isSessionOnlyDemo() {
@@ -256,7 +343,8 @@ final class PortalData {
 
     void save() throws SQLException {
         if (sessionOnlyDemo) return;
-        store.save(students, lecturers, courses, modules, timetableEntries, announcements);
+        store.save(students, lecturers, courses, modules, timetableEntries, announcements,
+                assessments, assessmentProgress, studentTasks);
     }
 
     Administrator authenticateAdministrator(String username, char[] password) throws SQLException {
@@ -393,9 +481,12 @@ final class PortalData {
     void synchronizeLecturerModules() {
         for (Lecturer lecturer : lecturers) lecturer.modules.clear();
         for (Module module : modules) {
-            if (module.lecturerId == null) continue;
-            Lecturer lecturer = lecturer(module.lecturerId);
-            if (lecturer != null) lecturer.modules.add(module.code);
+            for (Integer lecturerId : module.lecturerIds) {
+                Lecturer lecturer = lecturer(lecturerId);
+                if (lecturer != null && !lecturer.modules.contains(module.code)) {
+                    lecturer.modules.add(module.code);
+                }
+            }
         }
     }
 
@@ -415,6 +506,39 @@ final class PortalData {
         int next = 1;
         for (Announcement announcement : announcements) next = Math.max(next, announcement.id + 1);
         return next;
+    }
+
+    int nextAssessmentId() {
+        int next = 1;
+        for (Assessment assessment : assessments) next = Math.max(next, assessment.id + 1);
+        return next;
+    }
+
+    int nextStudentTaskId() {
+        int next = 1;
+        for (StudentTask task : studentTasks) next = Math.max(next, task.id + 1);
+        return next;
+    }
+
+    String assessmentStatus(int studentId, int assessmentId) {
+        for (AssessmentProgress progress : assessmentProgress) {
+            if (progress.studentId == studentId && progress.assessmentId == assessmentId) {
+                return progress.status;
+            }
+        }
+        return "Not started";
+    }
+
+    void setAssessmentStatus(int studentId, int assessmentId, String status) {
+        for (int i = 0; i < assessmentProgress.size(); i++) {
+            AssessmentProgress progress = assessmentProgress.get(i);
+            if (progress.studentId == studentId && progress.assessmentId == assessmentId) {
+                if (status == null) assessmentProgress.remove(i);
+                else progress.status = status;
+                return;
+            }
+        }
+        if (status != null) assessmentProgress.add(new AssessmentProgress(assessmentId, studentId, status));
     }
 
     String studentNumber(int id) {

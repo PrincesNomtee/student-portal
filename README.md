@@ -31,6 +31,11 @@ Maven is installed in `C:\Users\PKhoza\tools\apache-maven-3.10.0` on this comput
 Open PowerShell in the project folder and run:
 
 ```powershell
+# Point Maven at JDK 25 if JAVA_HOME currently selects another JDK.
+$env:JAVA_HOME = 'C:\path\to\jdk-25'
+$env:Path = "$env:JAVA_HOME\bin;$env:Path"
+mvn -version # Confirm it reports Java version 25.
+
 mvn compile exec:java
 ```
 
@@ -68,13 +73,13 @@ These built-in credentials are for the session-only demo mode, not the normal My
 
 ## Workspaces
 
-- **Administrator:** registration overview, student directory, create/edit/remove student records, add courses and modules, assign shared modules to courses, assign one lecturer to each module, manage the faculty directory, and publish campus announcements with optional deadlines.
-- **Lecturer:** assigned modules, students in those modules, four assessment marks per module, and campus announcements.
-- **Student:** a study dashboard with recorded-mark progress, assessment averages and trends, suggested next steps, a personal weekly timetable with overlap checking, campus announcements and deadline reminders, profile, modules, and results.
+- **Administrator:** registration overview, student directory, create/edit/remove student records, add courses and modules, assign shared modules to courses, assign multiple lecturers to a module, manage the faculty directory, and publish campus announcements with optional deadlines.
+- **Lecturer:** assigned modules, students in those modules, four assessment marks per module, shared assignment and exam publishing, and campus announcements.
+- **Student:** a study dashboard with recorded-mark progress, assessment averages and trends, suggested next steps, a personal weekly timetable with overlap checking, shared module assignment and exam tracking, private deadline reminders, campus announcements, profile, modules, and results.
 
 The starter curriculum includes a three-year Fashion Design course with modules in illustration, textiles, pattern drafting, garment construction, fashion history, digital design, merchandising, and sustainability. New or uninitialized databases receive the starter curriculum; existing curricula can be managed from the Administrator workspace.
 
-Student, lecturer, and administrator records, course/module setup, marks, timetable entries, and announcements are stored in the `jarateng_portal` MySQL database. The student timetable is a personal weekly planner, not an official university timetable. The portal rejects overlapping entries for the same student and day; it allows adjacent classes. Assessment insights and reminders are based only on marks, registration status, and optional announcement deadlines entered in the portal. A course can include multiple modules, and a module can be shared by multiple courses. Each module has at most one lecturer; a lecturer may teach multiple modules. Existing databases are migrated from the former many-to-many lecturer allocation table; if a module had multiple lecturers, the lowest lecturer ID is retained as its single assignment. Existing CSV files are kept as-is after their one-time import. Demo credentials are for the session-only demo mode; in MySQL mode, administrators create lecturer accounts from the faculty directory. Deletions are permanent for this local demo; do not use real student information.
+Student, lecturer, and administrator records, course/module setup, marks, timetable entries, announcements, shared assessments, student progress, and private reminders are stored in the `jarateng_portal` MySQL database. Lecturers can publish assignments and exams for their assigned modules; students taking those modules can update their own progress. Students can also create private reminders linked optionally to a module. The student timetable is a personal weekly planner, not an official university timetable. The portal rejects overlapping entries for the same student and day; it allows adjacent classes. Assessment insights are based only on marks and registration information entered in the portal. A course can include multiple modules, and a module can be shared by multiple courses. A module can have multiple assigned lecturers, and each lecturer can teach multiple modules. Existing single- and many-to-many lecturer assignments are migrated into the `module_lecturers` join table when the app starts. Existing CSV files are kept as-is after their one-time import. Demo credentials are for the session-only demo mode; in MySQL mode, administrators create lecturer accounts from the faculty directory. Deletions are permanent for this local demo; do not use real student information.
 
 ## Limitations
 
