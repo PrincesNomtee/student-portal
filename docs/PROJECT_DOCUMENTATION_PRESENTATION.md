@@ -53,12 +53,13 @@ the features shown in the application.
 [Show section 3 and its stakeholder table.]
 
 The documentation identifies four stakeholder types. Administrators maintain
-student and academic records. Lecturers see their assigned modules and students,
-record assessment marks and attendance, and publish shared assignment and exam
-deadlines. Students view their own progress, modules, results, shared
-assessments, private reminders, attendance history, timetable, profile, and
-announcements. The system operator prepares Java, Maven, and MySQL and looks
-after the database configuration and backups.
+student and academic records and can manage administrator logins. Lecturers
+see their assigned modules and students, record assessment marks and
+attendance, and publish shared assignment and exam deadlines. Students view
+their own progress, modules, results, shared assessments, private reminders,
+attendance history, timetable, profile, and announcements. The system operator
+prepares Java, Maven, and MySQL and looks after the database configuration and
+backups.
 
 This section also explains how demonstration accounts work. For example, a
 student account in the normal MySQL-backed mode is provisioned by an
@@ -91,9 +92,9 @@ operational limitations.
 Finally, the use-case flows explain tasks step by step. For example, an
 administrator registers a student by entering their details and programme;
 the application validates the information, assigns a student number, and
-saves the record. Other flows describe curriculum management, capturing marks
-and class attendance, viewing results, adding a timetable entry, and publishing
-an announcement.
+saves the record. Other flows describe curriculum management, managing
+administrator logins, capturing marks and class attendance, viewing results,
+adding a timetable entry, and publishing an announcement.
 
 Together, these requirements and flows connect the project goals to actions
 that can be demonstrated and checked.
@@ -157,8 +158,8 @@ The class diagram describes the main software components and how they relate.
 `PortalApp` is responsible for the Swing interface. `PortalData` groups the
 application's in-memory information, such as students, courses, modules,
 announcements, assessments, progress states, private reminders, and attendance
-sessions and records. `DatabaseStore` handles persistent database access, while
-`CsvStore` supports legacy file import.
+sessions, records, and administrator accounts. `DatabaseStore` handles
+persistent database access, while `CsvStore` supports legacy file import.
 
 The responsibility table gives a short explanation of each class and model.
 This view is different from the database diagram: the database diagram

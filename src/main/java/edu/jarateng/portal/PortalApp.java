@@ -425,7 +425,8 @@ public final class PortalApp {
 
     private List<String> pagesForRole() {
         if ("Administrator".equals(user.role)) {
-            return Arrays.asList("Overview", "Students", "Courses", "Lecturers", "Announcements");
+            return Arrays.asList("Overview", "Students", "Courses", "Lecturers", "Administrators",
+                    "Announcements");
         }
         if ("Lecturer".equals(user.role)) {
             return Arrays.asList("Overview", "My students", "Capture marks", "Attendance", "Assessment tracker",
@@ -478,6 +479,7 @@ public final class PortalApp {
             case "Students": body.add(adminStudents()); break;
             case "Courses": body.add(coursesPage()); break;
             case "Lecturers": body.add(lecturersPage()); break;
+            case "Administrators": body.add(administratorsPage()); break;
             case "My students": body.add(lecturerStudents()); break;
             case "Capture marks": body.add(captureMarks()); break;
             case "Attendance":
@@ -505,6 +507,7 @@ public final class PortalApp {
         if ("Students".equals(page)) return "Maintain student records and course registrations.";
         if ("Courses".equals(page)) return "Create courses and modules, share modules across courses, and assign lecturers.";
         if ("Lecturers".equals(page)) return "Faculty directory and teaching allocations.";
+        if ("Administrators".equals(page)) return "Manage administrator logins and account access.";
         if ("My students".equals(page)) return "Students enrolled in the modules assigned to you.";
         if ("Capture marks".equals(page)) return "Record four assessment marks for an enrolled student.";
         if ("Attendance".equals(page)) {
@@ -1240,6 +1243,241 @@ public final class PortalApp {
         page.add(notePanel("Lecturer accounts",
                 "Lecturers sign in with their email address. New or reset accounts must set a private password at first sign-in."));
         return page;
+    }
+
+    private JPanel administratorsPage() {
+        JPanel page = verticalPanel();
+        List<PortalData.AdministratorAccount> accounts;
+        try {
+            accounts = data.administratorAccounts();
+        } catch (SQLException error) {
+            page.add(notePanel("Could not load administrators", error.getMessage()));
+            return page;
+        }
+
+        Object[][] rows = new Object[accounts.size()][4];
+        for (int i = 0; i < accounts.size(); i++) {
+            PortalData.AdministratorAccount account = accounts.get(i);
+            rows[i] = new Object[] { account.username, account.name,
+                    account.active ? "Active" : "Deactivated",
+                    account.id == user.id ? "Signed in" : "" };
+        }
+        JTable table = table(new String[] { "Username", "Administrator", "Status", "Current session" }, rows);
+        table.putClientProperty("portal.administrators", accounts);
+        JPanel directory = tablePanel(table);
+        JPanel actions = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 10));
+        actions.setOpaque(false);
+        JButton add = primaryButton("Add administrator");
+        JButton reset = secondaryButton("Reset selected password");
+        JButton access = secondaryButton("Deactivate / reactivate");
+        JButton changeOwn = secondaryButton("Change my password");
+        boolean persistent = !data.isSessionOnlyDemo();
+        add.setEnabled(persistent);
+        reset.setEnabled(persistent);
+        access.setEnabled(persistent);
+        changeOwn.setEnabled(persistent);
+        add.addActionListener(event -> createAdministratorDialog());
+        reset.addActionListener(event -> resetAdministratorPassword(table));
+        access.addActionListener(event -> toggleAdministratorActive(table));
+        changeOwn.addActionListener(event -> changeMyAdministratorPassword());
+        actions.add(add);
+        actions.add(reset);
+        actions.add(access);
+        actions.add(changeOwn);
+        directory.add(actions, BorderLayout.SOUTH);
+        page.add(section("Administrator accounts", directory));
+        page.add(Box.createVerticalStrut(12));
+        page.add(notePanel("Account access",
+                "Each administrator has a separate username and password. Passwords are stored as salted PBKDF2 hashes. "
+                        + "You cannot deactivate your own account, and at least one active administrator must remain."));
+        if (data.isSessionOnlyDemo()) {
+            page.add(Box.createVerticalStrut(10));
+            page.add(notePanel("Session-only demo",
+                    "The built-in demo administrator cannot manage persistent accounts. Run the normal MySQL-backed app to use these controls."));
+        }
+        return page;
+    }
+
+    @SuppressWarnings("unchecked")
+    private PortalData.AdministratorAccount selectedAdministrator(JTable table) {
+        int row = table.getSelectedRow();
+        if (row < 0) {
+            showMessage("Select an administrator account first.", JOptionPane.INFORMATION_MESSAGE);
+            return null;
+        }
+        List<PortalData.AdministratorAccount> accounts =
+                (List<PortalData.AdministratorAccount>) table.getClientProperty("portal.administrators");
+        return accounts.get(table.convertRowIndexToModel(row));
+    }
+
+    private void createAdministratorDialog() {
+        JTextField username = field("");
+        JTextField firstName = field("");
+        JTextField surname = field("");
+        JPasswordField password = new CopyablePasswordField();
+        JPasswordField confirm = new CopyablePasswordField();
+        styleField(password);
+        styleField(confirm);
+        JPanel form = new JPanel(new GridLayout(0, 1, 7, 7));
+        form.setBorder(BorderFactory.createEmptyBorder(10, 4, 8, 4));
+        form.add(new JLabel("Username (3-64 letters, numbers, dot, underscore or hyphen)"));
+        form.add(username);
+        form.add(new JLabel("First name"));
+        form.add(firstName);
+        form.add(new JLabel("Surname"));
+        form.add(surname);
+        form.add(new JLabel("Password (at least 12 characters)"));
+        form.add(password);
+        form.add(new JLabel("Confirm password"));
+        form.add(confirm);
+        int answer = JOptionPane.showConfirmDialog(frame, form, "Add administrator",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        if (answer != JOptionPane.OK_OPTION) return;
+
+        String accountName = username.getText().trim().toLowerCase(Locale.ROOT);
+        String first = firstName.getText().trim();
+        String last = surname.getText().trim();
+        char[] secret = password.getPassword();
+        char[] confirmation = confirm.getPassword();
+        try {
+            if (!accountName.matches("[A-Za-z0-9._-]{3,64}") || first.isEmpty() || first.length() > 100
+                    || last.isEmpty() || last.length() > 100) {
+                showMessage("Enter a valid username and first and last names of at most 100 characters.",
+                        JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+            if (!validAdministratorPassword(secret, confirmation)) return;
+            data.createAdministrator(accountName, first, last, secret);
+            showMessage("Administrator account created for " + accountName + ".",
+                    JOptionPane.INFORMATION_MESSAGE);
+            selectPage(currentPage);
+        } catch (SQLException | IllegalArgumentException error) {
+            showMessage("The administrator account could not be created.\n" + error.getMessage(),
+                    JOptionPane.ERROR_MESSAGE);
+        } finally {
+            Arrays.fill(secret, '\0');
+            Arrays.fill(confirmation, '\0');
+            password.setText("");
+            confirm.setText("");
+        }
+    }
+
+    private void resetAdministratorPassword(JTable table) {
+        PortalData.AdministratorAccount selected = selectedAdministrator(table);
+        if (selected == null) return;
+        if (selected.id == user.id) {
+            showMessage("Use Change my password to update your own administrator password.",
+                    JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        JPasswordField password = new CopyablePasswordField();
+        JPasswordField confirm = new CopyablePasswordField();
+        styleField(password);
+        styleField(confirm);
+        JPanel form = new JPanel(new GridLayout(0, 1, 7, 7));
+        form.setBorder(BorderFactory.createEmptyBorder(10, 4, 8, 4));
+        form.add(new JLabel("New password for " + selected.username + " (at least 12 characters)"));
+        form.add(password);
+        form.add(new JLabel("Confirm new password"));
+        form.add(confirm);
+        int answer = JOptionPane.showConfirmDialog(frame, form, "Reset administrator password",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        if (answer != JOptionPane.OK_OPTION) return;
+        char[] secret = password.getPassword();
+        char[] confirmation = confirm.getPassword();
+        try {
+            if (!validAdministratorPassword(secret, confirmation)) return;
+            data.resetAdministratorPassword(selected.id, secret, user.id);
+            showMessage("The password for " + selected.username + " has been reset.",
+                    JOptionPane.INFORMATION_MESSAGE);
+            selectPage(currentPage);
+        } catch (SQLException | IllegalArgumentException error) {
+            showMessage("The administrator password could not be reset.\n" + error.getMessage(),
+                    JOptionPane.ERROR_MESSAGE);
+        } finally {
+            Arrays.fill(secret, '\0');
+            Arrays.fill(confirmation, '\0');
+            password.setText("");
+            confirm.setText("");
+        }
+    }
+
+    private boolean validAdministratorPassword(char[] password, char[] confirmation) {
+        if (password.length < 12) {
+            showMessage("Use at least 12 characters for the password.", JOptionPane.WARNING_MESSAGE);
+            return false;
+        }
+        if (!Arrays.equals(password, confirmation)) {
+            showMessage("The passwords do not match. Please try again.", JOptionPane.WARNING_MESSAGE);
+            return false;
+        }
+        return true;
+    }
+
+    private void toggleAdministratorActive(JTable table) {
+        PortalData.AdministratorAccount selected = selectedAdministrator(table);
+        if (selected == null) return;
+        if (selected.id == user.id) {
+            showMessage("You cannot deactivate the administrator account you are using.",
+                    JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        boolean activate = !selected.active;
+        int answer = JOptionPane.showConfirmDialog(frame,
+                (activate ? "Reactivate " : "Deactivate ") + selected.username + "? "
+                        + (activate ? "They will be able to sign in again."
+                                : "They will no longer be able to sign in."),
+                activate ? "Reactivate administrator" : "Deactivate administrator",
+                JOptionPane.YES_NO_OPTION, activate ? JOptionPane.QUESTION_MESSAGE : JOptionPane.WARNING_MESSAGE);
+        if (answer != JOptionPane.YES_OPTION) return;
+        try {
+            data.setAdministratorActive(selected.id, activate, user.id);
+            showMessage("Administrator account " + (activate ? "reactivated." : "deactivated."),
+                    JOptionPane.INFORMATION_MESSAGE);
+            selectPage(currentPage);
+        } catch (SQLException error) {
+            showMessage("Administrator access could not be updated.\n" + error.getMessage(),
+                    JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    private void changeMyAdministratorPassword() {
+        JPasswordField current = new CopyablePasswordField();
+        JPasswordField next = new CopyablePasswordField();
+        JPasswordField confirm = new CopyablePasswordField();
+        styleField(current);
+        styleField(next);
+        styleField(confirm);
+        JPanel form = new JPanel(new GridLayout(0, 1, 7, 7));
+        form.setBorder(BorderFactory.createEmptyBorder(10, 4, 8, 4));
+        form.add(new JLabel("Current password"));
+        form.add(current);
+        form.add(new JLabel("New password (at least 12 characters)"));
+        form.add(next);
+        form.add(new JLabel("Confirm new password"));
+        form.add(confirm);
+        int answer = JOptionPane.showConfirmDialog(frame, form, "Change my administrator password",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        if (answer != JOptionPane.OK_OPTION) return;
+        char[] currentPassword = current.getPassword();
+        char[] nextPassword = next.getPassword();
+        char[] confirmation = confirm.getPassword();
+        try {
+            if (!validAdministratorPassword(nextPassword, confirmation)) return;
+            data.changeAdministratorPassword(user.id, currentPassword, nextPassword);
+            showMessage("Your administrator password has been changed.", JOptionPane.INFORMATION_MESSAGE);
+            selectPage(currentPage);
+        } catch (SQLException | IllegalArgumentException error) {
+            showMessage("Your administrator password could not be changed.\n" + error.getMessage(),
+                    JOptionPane.ERROR_MESSAGE);
+        } finally {
+            Arrays.fill(currentPassword, '\0');
+            Arrays.fill(nextPassword, '\0');
+            Arrays.fill(confirmation, '\0');
+            current.setText("");
+            next.setText("");
+            confirm.setText("");
+        }
     }
 
     private void createOrResetLecturerAccount(JTable table) {

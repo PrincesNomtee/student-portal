@@ -120,6 +120,20 @@ final class PortalData {
         }
     }
 
+    static final class AdministratorAccount {
+        final int id;
+        final String username;
+        final String name;
+        final boolean active;
+
+        AdministratorAccount(int id, String username, String name, boolean active) {
+            this.id = id;
+            this.username = username;
+            this.name = name;
+            this.active = active;
+        }
+    }
+
     static final class TimetableEntry {
         final int studentId;
         final String moduleCode;
@@ -405,6 +419,70 @@ final class PortalData {
             return null;
         }
         return store.authenticateAdministrator(username, password);
+    }
+
+    List<AdministratorAccount> administratorAccounts() throws SQLException {
+        if (sessionOnlyDemo) {
+            return new ArrayList<AdministratorAccount>(Arrays.asList(
+                    new AdministratorAccount(1, DatabaseStore.DEMO_ADMIN_USERNAME,
+                            "Campus Administrator", true)));
+        }
+        return store.loadAdministratorAccounts();
+    }
+
+    void createAdministrator(String username, String firstName, String surname, char[] password)
+            throws SQLException {
+        if (password.length < 12) {
+            throw new IllegalArgumentException("Use at least 12 characters for the password.");
+        }
+        if (sessionOnlyDemo) {
+            throw new SQLException("Administrator account management is unavailable in session-only demo mode.");
+        }
+        try {
+            store.createAdministrator(username, firstName, surname, DatabaseStore.hashPassword(password));
+        } catch (GeneralSecurityException error) {
+            throw new SQLException("Could not create the administrator password hash.", error);
+        }
+    }
+
+    void resetAdministratorPassword(int administratorId, char[] password, int currentAdministratorId)
+            throws SQLException {
+        if (password.length < 12) {
+            throw new IllegalArgumentException("Use at least 12 characters for the password.");
+        }
+        if (sessionOnlyDemo) {
+            throw new SQLException("Administrator account management is unavailable in session-only demo mode.");
+        }
+        try {
+            store.resetAdministratorPassword(administratorId, DatabaseStore.hashPassword(password),
+                    currentAdministratorId);
+        } catch (GeneralSecurityException error) {
+            throw new SQLException("Could not create the administrator password hash.", error);
+        }
+    }
+
+    void setAdministratorActive(int administratorId, boolean active, int currentAdministratorId)
+            throws SQLException {
+        if (sessionOnlyDemo) {
+            throw new SQLException("Administrator account management is unavailable in session-only demo mode.");
+        }
+        store.setAdministratorActive(administratorId, active, currentAdministratorId);
+    }
+
+    void changeAdministratorPassword(int administratorId, char[] currentPassword, char[] newPassword)
+            throws SQLException {
+        if (newPassword.length < 12) {
+            throw new IllegalArgumentException("Use at least 12 characters for the password.");
+        }
+        if (sessionOnlyDemo) {
+            throw new SQLException("Password changes are unavailable for the built-in demo account.");
+        }
+        try {
+            store.changeAdministratorPassword(administratorId, currentPassword,
+                    DatabaseStore.hashPassword(newPassword));
+        } catch (GeneralSecurityException error) {
+            throw new SQLException("Could not create the administrator password hash.", error);
+        }
     }
 
     Student authenticateStudent(String studentNumber, char[] password) throws SQLException {

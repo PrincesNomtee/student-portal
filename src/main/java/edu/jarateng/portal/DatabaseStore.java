@@ -67,7 +67,7 @@ final class DatabaseStore {
             "CREATE TABLE IF NOT EXISTS students (id INT PRIMARY KEY, student_number VARCHAR(32) NOT NULL UNIQUE, first_name VARCHAR(100) NOT NULL, surname VARCHAR(100) NOT NULL, email VARCHAR(254) NOT NULL UNIQUE, course_code VARCHAR(24) NOT NULL, status VARCHAR(24) NOT NULL, enrollment_date DATE NOT NULL, CONSTRAINT fk_students_course FOREIGN KEY (course_code) REFERENCES courses(course_code))",
             "CREATE TABLE IF NOT EXISTS lecturers (id INT PRIMARY KEY, first_name VARCHAR(100) NOT NULL, surname VARCHAR(100) NOT NULL, email VARCHAR(254) NOT NULL UNIQUE)",
             "CREATE TABLE IF NOT EXISTS module_lecturers (module_code VARCHAR(24) NOT NULL, lecturer_id INT NOT NULL, PRIMARY KEY (module_code, lecturer_id), KEY idx_module_lecturers_lecturer (lecturer_id), CONSTRAINT fk_module_lecturers_module FOREIGN KEY (module_code) REFERENCES modules(module_code) ON DELETE CASCADE, CONSTRAINT fk_module_lecturers_lecturer FOREIGN KEY (lecturer_id) REFERENCES lecturers(id) ON DELETE CASCADE)",
-            "CREATE TABLE IF NOT EXISTS administrators (id INT NOT NULL AUTO_INCREMENT PRIMARY KEY, username VARCHAR(64) NOT NULL UNIQUE, first_name VARCHAR(100) NOT NULL, surname VARCHAR(100) NOT NULL, password_hash VARCHAR(255) NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+            "CREATE TABLE IF NOT EXISTS administrators (id INT NOT NULL AUTO_INCREMENT PRIMARY KEY, username VARCHAR(64) NOT NULL UNIQUE, first_name VARCHAR(100) NOT NULL, surname VARCHAR(100) NOT NULL, password_hash VARCHAR(255) NOT NULL, active BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
             "CREATE TABLE IF NOT EXISTS student_accounts (student_id INT PRIMARY KEY, password_hash VARCHAR(255) NOT NULL, must_change_password BOOLEAN NOT NULL DEFAULT TRUE, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, CONSTRAINT fk_student_accounts_student FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE)",
             "CREATE TABLE IF NOT EXISTS lecturer_accounts (lecturer_id INT PRIMARY KEY, password_hash VARCHAR(255) NOT NULL, must_change_password BOOLEAN NOT NULL DEFAULT TRUE, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, CONSTRAINT fk_lecturer_accounts_lecturer FOREIGN KEY (lecturer_id) REFERENCES lecturers(id) ON DELETE CASCADE)",
             "CREATE TABLE IF NOT EXISTS assessment_marks (student_id INT NOT NULL, module_code VARCHAR(24) NOT NULL, assessment_number TINYINT NOT NULL, score TINYINT UNSIGNED NOT NULL, PRIMARY KEY (student_id, module_code, assessment_number), CONSTRAINT chk_assessment_number CHECK (assessment_number BETWEEN 1 AND 4), CONSTRAINT chk_assessment_score CHECK (score BETWEEN 0 AND 100), CONSTRAINT fk_marks_student FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE, CONSTRAINT fk_marks_module FOREIGN KEY (module_code) REFERENCES modules(module_code))",
@@ -81,8 +81,26 @@ final class DatabaseStore {
         };
         try (Connection connection = connect(); Statement statement = connection.createStatement()) {
             for (String sql : statements) statement.executeUpdate(sql);
+            ensureAdministratorActiveColumn(connection);
             migrateModuleLecturers(connection);
             seedDemoAdministrator(connection);
+        }
+    }
+
+    private void ensureAdministratorActiveColumn(Connection connection) throws SQLException {
+        boolean hasActiveColumn;
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT COUNT(*) FROM information_schema.COLUMNS "
+                        + "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'administrators' "
+                        + "AND COLUMN_NAME = 'active'");
+                ResultSet results = statement.executeQuery()) {
+            hasActiveColumn = results.next() && results.getInt(1) > 0;
+        }
+        if (!hasActiveColumn) {
+            try (Statement alter = connection.createStatement()) {
+                alter.executeUpdate("ALTER TABLE administrators "
+                        + "ADD COLUMN active BOOLEAN NOT NULL DEFAULT TRUE AFTER password_hash");
+            }
         }
     }
 
@@ -232,7 +250,8 @@ final class DatabaseStore {
             throws SQLException {
         try (Connection connection = connect();
                 PreparedStatement statement = connection.prepareStatement(
-                        "SELECT id, username, first_name, surname, password_hash FROM administrators WHERE username = ?")) {
+                        "SELECT id, username, first_name, surname, password_hash "
+                                + "FROM administrators WHERE username = ? AND active = TRUE")) {
             statement.setString(1, username);
             try (ResultSet results = statement.executeQuery()) {
                 if (!results.next() || !verifyPassword(suppliedPassword, results.getString("password_hash"))) {
@@ -241,6 +260,116 @@ final class DatabaseStore {
                 return new PortalData.Administrator(results.getInt("id"),
                         results.getString("username"),
                         results.getString("first_name") + " " + results.getString("surname"));
+            }
+        }
+    }
+
+    List<PortalData.AdministratorAccount> loadAdministratorAccounts() throws SQLException {
+        List<PortalData.AdministratorAccount> accounts =
+                new ArrayList<PortalData.AdministratorAccount>();
+        try (Connection connection = connect();
+                PreparedStatement statement = connection.prepareStatement(
+                        "SELECT id, username, first_name, surname, active "
+                                + "FROM administrators ORDER BY surname, first_name, username");
+                ResultSet results = statement.executeQuery()) {
+            while (results.next()) {
+                accounts.add(new PortalData.AdministratorAccount(
+                        results.getInt("id"),
+                        results.getString("username"),
+                        results.getString("first_name") + " " + results.getString("surname"),
+                        results.getBoolean("active")));
+            }
+        }
+        return accounts;
+    }
+
+    void createAdministrator(String username, String firstName, String surname, String passwordHash)
+            throws SQLException {
+        try (Connection connection = connect();
+                PreparedStatement statement = connection.prepareStatement(
+                        "INSERT INTO administrators (username, first_name, surname, password_hash, active) "
+                                + "VALUES (?, ?, ?, ?, TRUE)")) {
+            statement.setString(1, username);
+            statement.setString(2, firstName);
+            statement.setString(3, surname);
+            statement.setString(4, passwordHash);
+            statement.executeUpdate();
+        }
+    }
+
+    void resetAdministratorPassword(int administratorId, String passwordHash, int currentAdministratorId)
+            throws SQLException {
+        if (administratorId == currentAdministratorId) {
+            throw new SQLException("Use Change my password to update your own administrator password.");
+        }
+        try (Connection connection = connect();
+                PreparedStatement statement = connection.prepareStatement(
+                        "UPDATE administrators SET password_hash = ? WHERE id = ?")) {
+            statement.setString(1, passwordHash);
+            statement.setInt(2, administratorId);
+            if (statement.executeUpdate() != 1) {
+                throw new SQLException("The administrator account no longer exists.");
+            }
+        }
+    }
+
+    void setAdministratorActive(int administratorId, boolean active, int currentAdministratorId)
+            throws SQLException {
+        if (administratorId == currentAdministratorId) {
+            throw new SQLException("You cannot deactivate the administrator account you are using.");
+        }
+        try (Connection connection = connect()) {
+            connection.setAutoCommit(false);
+            try {
+                if (!active) {
+                    try (PreparedStatement statement = connection.prepareStatement(
+                            "SELECT id FROM administrators WHERE active = TRUE FOR UPDATE");
+                            ResultSet results = statement.executeQuery()) {
+                        int remaining = 0;
+                        while (results.next()) {
+                            if (results.getInt("id") != administratorId) remaining++;
+                        }
+                        if (remaining == 0) {
+                            throw new SQLException("At least one active administrator account must remain.");
+                        }
+                    }
+                }
+                try (PreparedStatement statement = connection.prepareStatement(
+                        "UPDATE administrators SET active = ? WHERE id = ?")) {
+                    statement.setBoolean(1, active);
+                    statement.setInt(2, administratorId);
+                    if (statement.executeUpdate() != 1) {
+                        throw new SQLException("The administrator account no longer exists.");
+                    }
+                }
+                connection.commit();
+            } catch (SQLException error) {
+                connection.rollback();
+                throw error;
+            } finally {
+                connection.setAutoCommit(true);
+            }
+        }
+    }
+
+    void changeAdministratorPassword(int administratorId, char[] currentPassword, String newPasswordHash)
+            throws SQLException {
+        try (Connection connection = connect();
+                PreparedStatement query = connection.prepareStatement(
+                        "SELECT password_hash FROM administrators WHERE id = ? AND active = TRUE")) {
+            query.setInt(1, administratorId);
+            try (ResultSet results = query.executeQuery()) {
+                if (!results.next() || !verifyPassword(currentPassword, results.getString("password_hash"))) {
+                    throw new SQLException("The current password is incorrect.");
+                }
+            }
+            try (PreparedStatement update = connection.prepareStatement(
+                    "UPDATE administrators SET password_hash = ? WHERE id = ? AND active = TRUE")) {
+                update.setString(1, newPasswordHash);
+                update.setInt(2, administratorId);
+                if (update.executeUpdate() != 1) {
+                    throw new SQLException("The active administrator account no longer exists.");
+                }
             }
         }
     }

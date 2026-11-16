@@ -22,7 +22,7 @@ This document describes the current implementation for learning and system-analy
 
 | Stakeholder | Current system capabilities |
 | --- | --- |
-| Administrator | View an overview; add, edit, and remove student records; create courses and modules; assign modules to courses and multiple lecturers; add and remove lecturers; publish and remove campus announcements with optional deadlines. |
+| Administrator | View an overview; add, edit, and remove student records; create courses and modules; assign modules to courses and multiple lecturers; add and remove lecturers; create administrators, reset passwords, change own password, and deactivate/reactivate accounts; publish and remove campus announcements with optional deadlines. |
 | Lecturer | View allocated modules and students in those modules; capture up to four assessment marks per module; record class attendance; publish and manage module assignments and exams; view campus announcements. |
 | Student | View a study dashboard, suggested next steps, assessment averages and trends, profile, programme modules, results, shared module assessments and progress, private reminders, attendance history and percentage, announcements, and a personal timetable with overlap checking. |
 | System operator | Install Java, Maven, and MySQL; create the database; configure the database connection; back up the local database. |
@@ -56,6 +56,9 @@ In normal MySQL-backed mode, student accounts are provisioned by an administrato
 | FR-19 | Let lecturers create class sessions for assigned modules and record enrolled students as present, absent, or not marked. | Lecturer |
 | FR-20 | Let students view their attendance history and calculate attendance percentage from marked sessions only. | Student |
 | FR-21 | Persist attendance sessions and per-student records in MySQL. | System |
+| FR-22 | Let administrators create administrator accounts with unique usernames and password hashes. | Administrator |
+| FR-23 | Let administrators reset another administrator's password, deactivate/reactivate accounts, and change their own password after verifying the current password. | Administrator |
+| FR-24 | Prevent administrators from disabling their own signed-in account or deactivating the last active administrator. | System |
 
 ### 4.2 Quality attributes and constraints
 
@@ -84,6 +87,14 @@ In normal MySQL-backed mode, student accounts are provisioned by an administrato
 4. Use **Assign lecturers to selected module** to add, change, or clear the module's lecturer assignments.
 5. Course/module relationships are stored in `course_modules`; module/lecturer relationships are stored in `module_lecturers`.
 6. In session-only demo mode, the same curriculum actions work in memory, and the UI warns that changes are temporary.
+
+**Administrator manages administrator accounts**
+
+1. Sign in to the normal MySQL-backed Administrator workspace and open **Administrators**.
+2. Create an account with a unique username, name, and password of at least 12 characters; the password is stored as a salted PBKDF2 hash.
+3. Use the directory to set a new password for another administrator or deactivate/reactivate their login.
+4. Change your own password by entering the current password and confirming a new password.
+5. The app does not allow deactivating the account currently in use or the last active administrator. In session-only demo mode, administrator management is disabled and the demo login stays fixed.
 
 **Lecturer records marks**
 
@@ -242,7 +253,7 @@ flowchart LR
 | `student_tasks` | `id INT PK`; `student_id INT NOT NULL FK -> students.id ON DELETE CASCADE`; `module_code VARCHAR(24) NULL FK -> modules.module_code ON DELETE SET NULL`; `task_type VARCHAR(16) NOT NULL`; `title VARCHAR(160) NOT NULL`; `due_date DATE NOT NULL`; `details VARCHAR(1000) NOT NULL`; `status VARCHAR(16) NOT NULL` | Private assignment or exam reminders created by a student; a module association is optional. |
 | `attendance_sessions` | `id INT PK`; `module_code VARCHAR(24) NOT NULL FK -> modules.module_code ON DELETE CASCADE`; `session_date DATE NOT NULL`; `title VARCHAR(100) NOT NULL` | A dated class meeting created by a lecturer assigned to the module. |
 | `attendance_records` | `session_id INT FK -> attendance_sessions.id ON DELETE CASCADE`; `student_id INT FK -> students.id ON DELETE CASCADE`; `status VARCHAR(16) NOT NULL` (`Not marked`, `Present`, or `Absent`); composite `PK(session_id, student_id)` | One student's attendance status for one class session. |
-| `administrators` | `id INT AUTO_INCREMENT PK`; `username VARCHAR(64) NOT NULL UK`; `first_name VARCHAR(100) NOT NULL`; `surname VARCHAR(100) NOT NULL`; `password_hash VARCHAR(255) NOT NULL`; `created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP` | Administrator sign-in identity and salted password hash. |
+| `administrators` | `id INT AUTO_INCREMENT PK`; `username VARCHAR(64) NOT NULL UK`; `first_name VARCHAR(100) NOT NULL`; `surname VARCHAR(100) NOT NULL`; `password_hash VARCHAR(255) NOT NULL`; `active BOOLEAN NOT NULL DEFAULT TRUE`; `created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP` | Administrator sign-in identity, salted password hash, and account-access status. Existing tables are migrated to add `active`; existing admins stay active. |
 
 ### 6.2 Relationship rules
 
@@ -257,6 +268,7 @@ flowchart LR
 - Announcements are shared across roles; a nullable deadline supports student reminders without inventing due dates.
 - Administrator accounts, announcements, and startup metadata are independent of student registration records.
 - Each student may have one account. The student number is used as the login name; password hashes and the required-change flag are stored separately from profile data. Removing a student cascades to their account.
+- Administrator accounts have unique usernames and salted PBKDF2 hashes. In normal MySQL mode they can be managed from the Administrators page; deactivated accounts cannot sign in, and at least one active account must remain.
 - Foreign keys in `course_modules`, `module_lecturers`, `students`, `assessment_marks`, and `timetable_entries` enforce the relationships. Deleting a lecturer or module cascades to its module assignment rows; deleting a student cascades to their marks and timetable entries.
 - Curriculum attributes are stored with their own primary keys; the course-module and module-lecturer joins contain only relationship keys.
 - Startup migrates assignments from the former `modules.lecturer_id` column and legacy `lecturer_modules` table into `module_lecturers`, preserving all valid lecturer assignments before removing the old single-lecturer column and legacy table.
@@ -335,6 +347,7 @@ flowchart LR
 | `PortalData.Assessment` | Represents an assignment or exam published for a module by a lecturer. |
 | `PortalData.AssessmentProgress` | Represents one student's progress status for a shared module assessment. |
 | `PortalData.StudentTask` | Represents a private student assignment or exam reminder, optionally linked to a module. |
+| `PortalData.AdministratorAccount` | Represents administrator directory details and account active status; password hashes are never loaded into the UI model. |
 | `PortalData.AttendanceSession` | Represents a dated class session for one module. |
 | `PortalData.AttendanceRecord` | Represents one student's status for a class session. |
 | `DatabaseStore` | Creates tables, authenticates administrators, reads/writes MySQL records, and imports legacy CSV data through `CsvStore`. |
